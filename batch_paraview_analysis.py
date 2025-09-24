@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 """
-
-TO RUN IT:
-
-python3.10 batch_paraview_analysis.py
-
 Working ParaView Batch Processor with subprocess isolation
 
 This approach runs each file in a separate ParaView process to completely
@@ -34,27 +29,38 @@ FILE_PATTERNS = {
 }
 
 # --- Analysis Configuration ---
-# 
-# List of possible symbols that you may have in your VTU so that you can paste them here:
-# 
-# ρ
-# θ
-#
 BATCH_CONFIG = {
-    #'data_array': 'VELOMAG',
-    'data_array': 'θ',
-    'analysis_mode': 'slicing',  # 'averaging' or 'slicing'
+
     
+    #==============================================================================
+    # SELECT VARIABLE
+    #==============================================================================
+    #'data_array': 'w',
+    'data_array': 'VELOMAG',
+    #'data_array': 'θ',
+    #'data_array': 'ρ',
+    
+    #==============================================================================
+    # SLICING OR AVERAGING?
+    #==============================================================================
+    'analysis_mode': 'averaging',  # 'averaging' or 'slicing'
+
+    #==============================================================================
+    # AVERAGING
+    #==============================================================================
     'averaging': {
         'axis': 'Y',
         'resolution': [150, 150, 150],
         'geometric_limits': {
             'X': [None, None],
-            'Y': [0.1, 10.0],
+            'Y': [4500.0, 5500.0],
             'Z': [None, None]
         }
     },
-    
+
+    #==============================================================================
+    # SLICING
+    #==============================================================================
     'slicing': {
         'axis': 'Z',
         'coordinate': 100  # Use None for auto-center
@@ -246,8 +252,148 @@ def main():
         
         # Perform analysis
         if "{BATCH_CONFIG['analysis_mode']}" == 'averaging':
-            print("Averaging analysis not implemented in subprocess version")
-            return False
+            # Averaging analysis
+            axis = "{BATCH_CONFIG['averaging']['axis']}".upper()
+            resolution = {BATCH_CONFIG['averaging']['resolution']}
+            limits = {BATCH_CONFIG['averaging']['geometric_limits']}
+            
+            print(f"Starting {{axis}}-axis averaging...")
+            
+            # Import required modules
+            from vtkmodules.numpy_interface import dataset_adapter as dsa
+            from vtk import vtkStructuredGrid, vtkPoints
+            from vtk.util.numpy_support import numpy_to_vtk
+            import numpy as np
+            
+            # Get original bounds
+            original_bounds = source.GetDataInformation().GetBounds()
+            print(f"Original bounds: X=[{{original_bounds[0]:.2f}}, {{original_bounds[1]:.2f}}], Y=[{{original_bounds[2]:.2f}}, {{original_bounds[3]:.2f}}], Z=[{{original_bounds[4]:.2f}}, {{original_bounds[5]:.2f}}]")
+            
+            # Apply geometric limits
+            effective_bounds = list(original_bounds)
+            for i, axis_name in enumerate(['X', 'Y', 'Z']):
+                axis_limits = limits.get(axis_name, [None, None])
+                if axis_limits[0] is not None:
+                    effective_bounds[i*2] = max(axis_limits[0], original_bounds[i*2])
+                if axis_limits[1] is not None:
+                    effective_bounds[i*2+1] = min(axis_limits[1], original_bounds[i*2+1])
+            
+            print(f"Effective bounds: X=[{{effective_bounds[0]:.2f}}, {{effective_bounds[1]:.2f}}], Y=[{{effective_bounds[2]:.2f}}, {{effective_bounds[3]:.2f}}], Z=[{{effective_bounds[4]:.2f}}, {{effective_bounds[5]:.2f}}]")
+            
+            # Apply geometric clipping
+            clipped_data = source
+            for i, axis_name in enumerate(['X', 'Y', 'Z']):
+                axis_limits = limits.get(axis_name, [None, None])
+                
+                if axis_limits[0] is not None:  # Min limit
+                    clip_min = Clip(Input=clipped_data)
+                    clip_min.ClipType = 'Plane'
+                    normal = [0, 0, 0]
+                    normal[i] = 1
+                    clip_min.ClipType.Normal = normal
+                    clip_min.ClipType.Origin = [0, 0, 0]
+                    clip_min.ClipType.Origin[i] = axis_limits[0]
+                    clip_min.Invert = 0
+                    clipped_data = clip_min
+                    print(f"Applied {{axis_name}}_min = {{axis_limits[0]}}")
+                    
+                if axis_limits[1] is not None:  # Max limit
+                    clip_max = Clip(Input=clipped_data)
+                    clip_max.ClipType = 'Plane'
+                    normal = [0, 0, 0]
+                    normal[i] = -1
+                    clip_max.ClipType.Normal = normal
+                    clip_max.ClipType.Origin = [0, 0, 0]
+                    clip_max.ClipType.Origin[i] = axis_limits[1]
+                    clip_max.Invert = 0
+                    clipped_data = clip_max
+                    print(f"Applied {{axis_name}}_max = {{axis_limits[1]}}")
+            
+            # Resample to uniform grid
+            print(f"Resampling to uniform grid {{resolution}}...")
+            resampled = ResampleToImage(Input=clipped_data)
+            resampled.SamplingDimensions = resolution
+            resampled.SamplingBounds = effective_bounds
+            resampled.UpdatePipeline()
+            
+            # Extract and process data
+            print("Processing 3D data for averaging...")
+            from paraview.simple import servermanager
+            vtk_data = servermanager.Fetch(resampled)
+            wrapped_data = dsa.WrapDataObject(vtk_data)
+            
+            # Get the data array
+            available_arrays = [wrapped_data.PointData.GetArrayName(i) 
+                               for i in range(wrapped_data.PointData.GetNumberOfArrays())]
+            if data_array not in available_arrays:
+                print(f"WARNING: Array '{{data_array}}' not found, using first available array")
+                actual_array_name = available_arrays[0]
+            else:
+                actual_array_name = data_array
+            
+            data_3d_flat = wrapped_data.PointData[actual_array_name]
+            dims = resampled.SamplingDimensions
+            data_3d = data_3d_flat.reshape(dims[2], dims[1], dims[0])  # (Nz, Ny, Nx)
+            
+            print(f"Data shape: {{data_3d.shape}}")
+            
+            # Perform averaging based on axis
+            axis_index = {{'X': 0, 'Y': 1, 'Z': 2}}[axis]
+            
+            if axis == 'X':
+                averaged_data_2d = np.mean(data_3d, axis=2)  # Average along X -> (Nz, Ny)
+                result_axes = ['Y', 'Z']
+                grid_dims = [dims[1], dims[2]]  # (Ny, Nz)
+                bounds_indices = [2, 3, 4, 5]  # Y and Z bounds
+            elif axis == 'Y':
+                averaged_data_2d = np.mean(data_3d, axis=1)  # Average along Y -> (Nz, Nx)
+                result_axes = ['X', 'Z']
+                grid_dims = [dims[0], dims[2]]  # (Nx, Nz)
+                bounds_indices = [0, 1, 4, 5]  # X and Z bounds
+            else:  # Z
+                averaged_data_2d = np.mean(data_3d, axis=0)  # Average along Z -> (Ny, Nx)
+                result_axes = ['X', 'Y']
+                grid_dims = [dims[0], dims[1]]  # (Nx, Ny)
+                bounds_indices = [0, 1, 2, 3]  # X and Y bounds
+            
+            print(f"Averaged data shape: {{averaged_data_2d.shape}}")
+            print(f"Created {{result_axes[0]}}-{{result_axes[1]}} plane")
+            
+            # Create structured grid for visualization
+            n_axis1, n_axis2 = grid_dims
+            structured_grid = vtkStructuredGrid()
+            structured_grid.SetDimensions(n_axis1, n_axis2, 1)
+            
+            points = vtkPoints()
+            axis1_coords = np.linspace(effective_bounds[bounds_indices[0]], effective_bounds[bounds_indices[1]], n_axis1)
+            axis2_coords = np.linspace(effective_bounds[bounds_indices[2]], effective_bounds[bounds_indices[3]], n_axis2)
+            avg_coord = (effective_bounds[axis_index*2] + effective_bounds[axis_index*2+1]) / 2.0
+            
+            # Add points based on averaging axis
+            for j in range(n_axis2):
+                for i in range(n_axis1):
+                    if axis == 'X':
+                        points.InsertNextPoint(avg_coord, axis1_coords[i], axis2_coords[j])
+                    elif axis == 'Y':
+                        points.InsertNextPoint(axis1_coords[i], avg_coord, axis2_coords[j])
+                    else:  # Z
+                        points.InsertNextPoint(axis1_coords[i], axis2_coords[j], avg_coord)
+            
+            structured_grid.SetPoints(points)
+            
+            vtk_array = numpy_to_vtk(averaged_data_2d.flatten('C'), deep=True)
+            vtk_array.SetName(f"{{data_array}}_{{axis}}_avg")
+            structured_grid.GetPointData().SetScalars(vtk_array)
+            
+            # Create producer for visualization
+            from paraview.simple import TrivialProducer
+            producer = TrivialProducer(registrationName=f'{{axis}}_Averaged_Data')
+            producer.GetClientSideObject().SetOutput(structured_grid)
+            producer.UpdatePipeline()
+            
+            source = producer
+            data_array = f"{{data_array}}_{{axis}}_avg"
+            
         else:
             # Slicing analysis
             axis = "{BATCH_CONFIG['slicing']['axis']}".upper()
@@ -309,17 +455,34 @@ def main():
         lut = GetColorTransferFunction(array_name)
         lut.ApplyPreset("{BATCH_CONFIG['visualization']['color_map']}", True)
         
-        # Set camera based on slice axis
-        axis = "{BATCH_CONFIG['slicing']['axis']}".upper()
-        if axis == 'X':
-            view.CameraPosition = [1, 0, 0]
-            view.CameraViewUp = [0, 0, 1]
-        elif axis == 'Y':
-            view.CameraPosition = [0, 1, 0]
-            view.CameraViewUp = [0, 0, 1]
-        else:  # Z
-            view.CameraPosition = [0, 0, 1]
-            view.CameraViewUp = [0, 1, 0]
+        # Set camera based on analysis mode and axis
+        if "{BATCH_CONFIG['analysis_mode']}" == 'averaging':
+            # Camera setup for averaging
+            avg_axis = "{BATCH_CONFIG['averaging']['axis']}".upper()
+            if avg_axis == 'X':
+                # Viewing Y-Z plane
+                view.CameraPosition = [1, 0, 0]
+                view.CameraViewUp = [0, 0, 1]
+            elif avg_axis == 'Y':
+                # Viewing X-Z plane  
+                view.CameraPosition = [0, 1, 0]
+                view.CameraViewUp = [0, 0, 1]
+            else:  # Z
+                # Viewing X-Y plane
+                view.CameraPosition = [0, 0, 1]
+                view.CameraViewUp = [0, 1, 0]
+        else:
+            # Camera setup for slicing
+            slice_axis = "{BATCH_CONFIG['slicing']['axis']}".upper()
+            if slice_axis == 'X':
+                view.CameraPosition = [1, 0, 0]
+                view.CameraViewUp = [0, 0, 1]
+            elif slice_axis == 'Y':
+                view.CameraPosition = [0, 1, 0]
+                view.CameraViewUp = [0, 0, 1]
+            else:  # Z
+                view.CameraPosition = [0, 0, 1]
+                view.CameraViewUp = [0, 1, 0]
         
         view.CameraFocalPoint = [0, 0, 0]
         view.CameraParallelProjection = 1
