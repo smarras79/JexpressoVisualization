@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """
+
+TO RUN THIS, simply use:
+
+   > python3.10 batch_paraview_analysis.py
+
 Working ParaView Batch Processor with subprocess isolation
 
 This approach runs each file in a separate ParaView process to completely
@@ -43,7 +48,8 @@ BATCH_CONFIG = {
     #==============================================================================
     # SLICING OR AVERAGING?
     #==============================================================================
-    'analysis_mode': 'averaging',  # 'averaging' or 'slicing'
+    #'analysis_mode': 'averaging',  # 'averaging' or 'slicing'
+    'analysis_mode': 'slicing',  # 'averaging' or 'slicing'
 
     #==============================================================================
     # AVERAGING
