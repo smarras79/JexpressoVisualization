@@ -2,7 +2,8 @@
 """
 
 TO RUN IT:
-> python3.10 batch_paraview_analysis.py
+
+python3.10 batch_paraview_analysis.py
 
 Working ParaView Batch Processor with subprocess isolation
 
@@ -33,8 +34,15 @@ FILE_PATTERNS = {
 }
 
 # --- Analysis Configuration ---
+# 
+# List of possible symbols that you may have in your VTU so that you can paste them here:
+# 
+# ρ
+# θ
+#
 BATCH_CONFIG = {
-    'data_array': 'w',
+    #'data_array': 'VELOMAG',
+    'data_array': 'θ',
     'analysis_mode': 'slicing',  # 'averaging' or 'slicing'
     
     'averaging': {

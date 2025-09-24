@@ -3,7 +3,7 @@
 ParaView Data Averaging and Slicing Tool
 
 INSTRUCTIONS TO RUN:
-/Applications/ParaView-5.11.2.app/Contents/bin/pvpython this_script.py
+/Applications/ParaView-5.11.2.app/Contents/bin/pvpython myviewer.py
 
 This script provides two main functionalities:
 1. Averaging: Calculate spatial averages along X, Y, or Z axis with optional geometric limits
@@ -20,12 +20,6 @@ Author: Enhanced ParaView Analysis Script
 # --- Input Data Configuration ---
 INPUT_FILE = './iter_406.pvtu'
 DATA_ARRAY = 'w'  # Use 'VELOMAG' for automatic velocity magnitude calculation from u,v,w components
-#
-# ρ
-# p
-# θ
-# u,v,w
-#
 
 # --- Special Data Arrays ---
 # If DATA_ARRAY is set to one of these special values, the script will automatically
@@ -37,7 +31,7 @@ SPECIAL_ARRAYS = {
 }
 
 # --- Analysis Mode Selection ---
-USE_AVERAGING = False # Set to False to use slicing instead
+USE_AVERAGING = False  # Set to False to use slicing instead
 
 # --- Averaging Configuration (only used when USE_AVERAGING = True) ---
 AVERAGING_CONFIG = {
@@ -247,10 +241,11 @@ class ParaViewAnalyzer:
         
         # Handle both regular and derived arrays
         actual_array_name = self.data_array
-        if actual_array_name not in [wrapped_data.PointData.GetArrayName(i) 
-                                   for i in range(wrapped_data.PointData.GetNumberOfArrays())]:
+        available_arrays = [wrapped_data.PointData.GetArrayName(i) 
+                           for i in range(wrapped_data.PointData.GetNumberOfArrays())]
+        if actual_array_name not in available_arrays:
             print(f"WARNING: Array '{actual_array_name}' not found, using first available array")
-            actual_array_name = wrapped_data.PointData.GetArrayName(0)
+            actual_array_name = available_arrays[0]
         
         data_3d_flat = wrapped_data.PointData[actual_array_name]
         dims = resampled.SamplingDimensions
