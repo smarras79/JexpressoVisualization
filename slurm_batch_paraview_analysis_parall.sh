@@ -16,10 +16,11 @@ cd /scratch/smarras/smarras/output/64x64x24/CompEuler/LESsmago/output/
 echo "Starting simple parallel ParaView processing..."
 echo "Job ID: $SLURM_JOB_ID, CPUs: $SLURM_NTASKS_PER_NODE"
 
+#=============================================
 # CUSTOMIZE THESE RANGES BASED ON YOUR FILES:
 # First, run this to see what files you have:
 # python3 batch_paraview_analysis.py --dry-run
-
+#=============================================
 # Then split the work across processes:
 python3 batch_paraview_analysis.py --range 100 199 1 --process-id 1 &
 python3 batch_paraview_analysis.py --range 200 299 1 --process-id 2 &
