@@ -1,13 +1,15 @@
 #!/usr/bin/env julia
 """
-INTERACTIVE implementation: All parallel pieces + Filled contours + User-selectable resolution
-Allows user to choose interpolation resolution for grid generation
+BATCH PROCESSING implementation: All parallel pieces + Filled contours + SLURM support
+Supports command line arguments for batch processing multiple PVTU files
 """
 
 using Statistics
 using GLMakie
 using ColorSchemes
 using NearestNeighbors
+using ArgParse
+using Dates
 
 struct CompletePVTUData
     points::Matrix{Float64}
@@ -19,11 +21,69 @@ struct CompletePVTUData
     n_pieces::Int
 end
 
-#
-#  MODIFIED FUNCTION
-#  This version reads the NumberOfPoints from the main <Piece> tag first,
-#  making it robust to variations in the rest of the XML header.
-#
+function parse_commandline()
+    """Parse command line arguments for batch processing"""
+    s = ArgParseSettings(description = "Batch PVTU Analysis for SLURM")
+    
+    @add_arg_table! s begin
+        "--range"
+            help = "File range to process: start end step"
+            nargs = 3
+            arg_type = Int
+            required = false
+        "--process-id"
+            help = "Process ID for output organization"
+            arg_type = Int
+            default = 1
+        "--resolution"
+            help = "Grid resolution for interpolation"
+            arg_type = Int
+            default = 200
+        "--output-dir"
+            help = "Output directory"
+            arg_type = String
+            default = "batch_output"
+        "--file-prefix"
+            help = "PVTU file prefix (e.g., 'iter_' for iter_XXX.pvtu)"
+            arg_type = String
+            default = "iter_"
+        "--slice-coord"
+            help = "Z-coordinate for velocity slice"
+            arg_type = Float64
+            default = 0.1
+        "--dry-run"
+            help = "Show files that would be processed without processing"
+            action = :store_true
+        "--variables"
+            help = "Variables to process (comma-separated: w,u,v)"
+            arg_type = String
+            default = "w"
+        "--reynolds-stress"
+            help = "Reynolds stress components to calculate (comma-separated: uv,uw,vw)"
+            arg_type = String
+            default = "uv"
+    end
+    
+    return parse_args(s)
+end
+
+function find_pvtu_files(file_prefix::String, start_idx::Int, end_idx::Int, step::Int)
+    """Find available PVTU files in the specified range"""
+    available_files = String[]
+    missing_files = Int[]
+    
+    for i in start_idx:step:end_idx
+        filename = "$(file_prefix)$(i).pvtu"
+        if isfile(filename)
+            push!(available_files, filename)
+        else
+            push!(missing_files, i)
+        end
+    end
+    
+    return available_files, missing_files
+end
+
 function read_single_piece_safe(filename::String)
     """Read a single VTU piece with robust, dynamic header parsing."""
     try
@@ -84,10 +144,9 @@ function read_single_piece_safe(filename::String)
     end
 end
 
-
 function read_all_parallel_pieces(pvtu_file::String)
     """Read ALL parallel VTU pieces and combine them"""
-    println("=== READING ALL PARALLEL PIECES ===")
+    println("=== READING: $pvtu_file ===")
     
     # Parse PVTU file
     pvtu_content = read(pvtu_file, String)
@@ -119,7 +178,7 @@ function read_all_parallel_pieces(pvtu_file::String)
         end
     end
     
-    println("\nSuccessfully read $successful/$(length(piece_files)) pieces")
+    println("Successfully read $successful/$(length(piece_files)) pieces")
     println("Total points across all pieces: $total_points")
     
     if isempty(all_points); error("No data pieces were read successfully."); end
@@ -133,120 +192,19 @@ function read_all_parallel_pieces(pvtu_file::String)
         zmin=minimum(view(combined_points, 3, :)), zmax=maximum(view(combined_points, 3, :))
     )
     
-    println("\nCOMPLETE DOMAIN from ALL pieces:")
-    println("  Points: $(size(combined_points, 2))")
-    println("  X: [$(bounds.xmin), $(bounds.xmax)]")
-    println("  Y: [$(bounds.ymin), $(bounds.ymax)]") 
-    println("  Z: [$(bounds.zmin), $(bounds.zmax)]")
-    
     return CompletePVTUData(combined_points, combined_u, combined_v, combined_w, 
                             total_points, bounds, successful)
 end
 
-function get_user_resolution()
-    """Interactive function to get resolution from user with suggestions"""
-    println("\n" * "="^60)
-    println("GRID RESOLUTION SELECTION")
-    println("="^60)
-    println("Choose the interpolation grid resolution for slice generation:")
-    println()
-    println("Resolution options and their characteristics:")
-    println("  • Low (100x100):     Fast, good for quick preview")
-    println("  • Medium (200x200):  Balanced speed/quality")
-    println("  • High (400x400):    Detailed, slower processing")
-    println("  • Ultra (800x800):   Maximum detail, slow")
-    println("  • Custom (N×N):      Your own choice")
-    println()
-    println("Recommendations:")
-    println("  - Start with Medium (200) for exploration")
-    println("  - Use High (400) for publication-quality plots")
-    println("  - Use Ultra (800) only for final high-resolution images")
-    println()
-    
-    local resolution::Int  # Declare variable explicitly
-    
-    while true
-        print("Enter your choice [Low/Medium/High/Ultra/Custom] or number: ")
-        user_input = strip(readline())
-        
-        # Handle different input formats
-        choice = lowercase(user_input)
-        
-        if choice in ["low", "l", "100"]
-            resolution = 100
-            println("Selected: Low resolution ($(resolution)×$(resolution))")
-            return resolution
-        elseif choice in ["medium", "m", "med", "200"]
-            resolution = 200
-            println("Selected: Medium resolution ($(resolution)×$(resolution))")
-            return resolution
-        elseif choice in ["high", "h", "400"]
-            resolution = 400
-            println("Selected: High resolution ($(resolution)×$(resolution))")
-            return resolution
-        elseif choice in ["ultra", "u", "800"]
-            resolution = 800
-            println("Selected: Ultra resolution ($(resolution)×$(resolution))")
-            return resolution
-        elseif choice in ["custom", "c"]
-            while true
-                print("Enter custom resolution (e.g., 300): ")
-                custom_input = strip(readline())
-                try
-                    resolution = parse(Int, custom_input)
-                    if resolution < 50
-                        println("Warning: Resolution too low (< 50), using minimum of 50")
-                        resolution = 50
-                    elseif resolution > 2000
-                        println("Warning: Very high resolution (> 2000), this may take a long time!")
-                        print("Continue with $(resolution)? [y/n]: ")
-                        confirm = lowercase(strip(readline()))
-                        if confirm != "y" && confirm != "yes"
-                            continue
-                        end
-                    end
-                    println("Selected: Custom resolution ($(resolution)×$(resolution))")
-                    return resolution
-                catch
-                    println("Invalid input. Please enter a number.")
-                end
-            end
-        else
-            # Try to parse as direct number
-            try
-                resolution = parse(Int, user_input)
-                if resolution < 50
-                    println("Warning: Resolution too low (< 50), using minimum of 50")
-                    resolution = 50
-                elseif resolution > 2000
-                    println("Warning: Very high resolution (> 2000), this may take a long time!")
-                    print("Continue with $(resolution)? [y/n]: ")
-                    confirm = lowercase(strip(readline()))
-                    if confirm != "y" && confirm != "yes"
-                        continue
-                    end
-                end
-                println("Selected: $(resolution)×$(resolution) resolution")
-                return resolution
-            catch
-                println("Invalid input. Please try again.")
-                println("Valid options: Low, Medium, High, Ultra, Custom, or a number")
-            end
-        end
-    end
-end
-
 function create_filled_contour_slice(data::CompletePVTUData, var::String, axis::String, coord::Float64, resolution::Int)
-    println("\n=== CREATING FILLED CONTOUR SLICE: $var at $axis=$coord ===")
-    println("Using resolution: $(resolution)×$(resolution)")
-    
+    """Create filled contour slice with specified resolution"""
     field_data = getproperty(data, Symbol(var))
     axis_idx = Dict("X" => 1, "Y" => 2, "Z" => 3)[uppercase(axis)]
     
     tolerance = 0.05 * (getproperty(data.bounds, Symbol(lowercase(axis) * "max")) - getproperty(data.bounds, Symbol(lowercase(axis) * "min")))
     slice_mask = abs.(view(data.points, axis_idx, :) .- coord) .<= tolerance
     
-    println("Found $(sum(slice_mask)) points for slice with tolerance $tolerance")
+    println("Found $(sum(slice_mask)) points for $var slice with tolerance $tolerance")
     if sum(slice_mask) < 3; error("Not enough points in slice."); end
 
     slice_points = data.points[:, slice_mask]
@@ -271,16 +229,9 @@ function create_filled_contour_slice(data::CompletePVTUData, var::String, axis::
     avg_point_spacing = sqrt(total_area / length(c1_array))
     search_radius = 2.0 * avg_point_spacing
     
-    println("Using search radius: $search_radius for interpolation")
-    
     # Build KDTree for efficient neighbor search
     tree_data = [c1_array c2_array]'
     kdtree = KDTree(tree_data)
-    
-    # Progress tracking for large grids
-    total_points = length(c1_range) * length(c2_range)
-    progress_interval = max(1, total_points ÷ 20)  # Update every 5%
-    processed = 0
     
     for (i, c1) in enumerate(c1_range), (j, c2) in enumerate(c2_range)
         # Find all points within search radius
@@ -305,26 +256,17 @@ function create_filled_contour_slice(data::CompletePVTUData, var::String, axis::
             nearest_idx, _ = nn(kdtree, [c1, c2])
             grid_data[i, j] = slice_field[nearest_idx]
         end
-        
-        # Progress update for large grids
-        processed += 1
-        if processed % progress_interval == 0
-            progress = round(100 * processed / total_points, digits=1)
-            println("  Interpolation progress: $(progress)%")
-        end
     end
     
     # Apply smoothing filter to reduce remaining noise
     grid_data = apply_smoothing_filter(grid_data)
     
-    println("Grid interpolation completed: $(size(grid_data))")
     axis_names = ["X", "Y", "Z"]
     return c1_range, c2_range, grid_data, axis_names[other_axes[1]], axis_names[other_axes[2]]
 end
 
 function plot_filled_contours(c1_range, c2_range, grid, xl, yl, var, axis, coord, file)
-    println("\n=== PLOTTING: $file ===")
-    
+    """Plot filled contours with improved visualization"""
     # Use Figure() constructor without deprecated resolution parameter
     fig = Figure(size = (1400, 1000), fontsize = 18)
     ax = Axis(fig[1, 1], xlabel=xl, ylabel=yl, title="$var slice at $axis = $coord", aspect=DataAspect())
@@ -360,15 +302,15 @@ function plot_filled_contours(c1_range, c2_range, grid, xl, yl, var, axis, coord
     # Add error handling for file saving
     try
         save(file, fig, px_per_unit = 2)
-        println("Saved plot to: $file")
+        println("✓ Saved: $file")
     catch e
         println("Error saving plot: $e")
         # Try alternative save without px_per_unit
         try
             save(file, fig)
-            println("Saved plot to: $file (without px_per_unit)")
+            println("✓ Saved: $file (without px_per_unit)")
         catch e2
-            println("Failed to save plot: $e2")
+            println("✗ Failed to save: $file - $e2")
         end
     end
 end
@@ -396,9 +338,7 @@ function apply_smoothing_filter(grid::Matrix{Float64}, kernel_size::Int=3)
 end
 
 function calculate_reynolds_stress_contours(data::CompletePVTUData, comp::String, avg_axis::String, resolution::Int)
-    println("\n=== REYNOLDS STRESS: <$comp'> averaged over $avg_axis ===")
-    println("Using resolution: $(resolution)×$(resolution)")
-    
+    """Calculate Reynolds stress contours with specified resolution"""
     # Calculate fluctuating components
     u_p = data.u .- mean(data.u)
     v_p = data.v .- mean(data.v)
@@ -445,11 +385,6 @@ function calculate_reynolds_stress_contours(data::CompletePVTUData, comp::String
     # Pre-allocate the grid for better performance
     rs_grid = zeros(length(c1_range), length(c2_range))
     
-    # Progress tracking
-    total_points = length(c1_range) * length(c2_range)
-    progress_interval = max(1, total_points ÷ 20)
-    processed = 0
-    
     for (i, c1) in enumerate(c1_range), (j, c2) in enumerate(c2_range)
         # Use weighted interpolation for Reynolds stress too
         neighbors = inrange(kdtree, [c1, c2], search_radius)
@@ -470,13 +405,6 @@ function calculate_reynolds_stress_contours(data::CompletePVTUData, comp::String
             nearest_idx, _ = nn(kdtree, [c1, c2])
             rs_grid[i, j] = rs_data[nearest_idx]
         end
-        
-        # Progress update
-        processed += 1
-        if processed % progress_interval == 0
-            progress = round(100 * processed / total_points, digits=1)
-            println("  Reynolds stress interpolation progress: $(progress)%")
-        end
     end
     
     # Apply smoothing
@@ -486,80 +414,172 @@ function calculate_reynolds_stress_contours(data::CompletePVTUData, comp::String
     return c1_range, c2_range, rs_grid, axis_names[other_axes[1]], axis_names[other_axes[2]]
 end
 
-function main()
+function process_single_file(pvtu_file::String, args::Dict, process_id::Int)
+    """Process a single PVTU file according to specified parameters"""
+    println("\n" * "="^80)
+    println("PROCESSING: $pvtu_file (Process $process_id)")
+    println("="^80)
+    
+    # Extract file identifier for output naming
+    file_base = replace(basename(pvtu_file), ".pvtu" => "")
+    
     try
-        println("Starting PVTU Analysis with Interactive Resolution Selection")
-        println("="^70)
+        # Read data
+        data = read_all_parallel_pieces(pvtu_file)
         
-        # Check for command line resolution argument first
-        cmd_resolution = parse_command_line_args()
+        # Parse variables and Reynolds stress components - convert to String
+        variables = [String(strip(var)) for var in split(args["variables"], ",")]
+        reynolds_components = [String(strip(comp)) for comp in split(args["reynolds-stress"], ",")]
         
-        # Get resolution (either from command line or interactive)
-        if cmd_resolution !== nothing
-            println("Using command line resolution: $(cmd_resolution)")
-            resolution = cmd_resolution
-        else
-            resolution = get_user_resolution()
+        # Create output directory
+        output_dir = joinpath(args["output-dir"], "process_$(process_id)")
+        mkpath(output_dir)
+        
+        # Process velocity slices
+        for var in variables
+            if var in ["u", "v", "w"]
+                println("\n--- Processing velocity slice: $var ---")
+                c1, c2, grid, xl, yl = create_filled_contour_slice(data, var, "Z", args["slice-coord"], args["resolution"])
+                output_file = joinpath(output_dir, "$(file_base)_$(var)_slice_$(args["resolution"]).png")
+                plot_filled_contours(c1, c2, grid, xl, yl, var, "Z", args["slice-coord"], output_file)
+            else
+                println("Skipping unknown variable: $var (valid: u, v, w)")
+            end
         end
         
-        println("\nLoading data...")
-        data = read_all_parallel_pieces("iter_406.pvtu")
-        mkpath("correct_output")
-
-        # Test 1: Velocity slice
-        println("\n" * "="^60)
-        println("GENERATING VELOCITY SLICE")
-        println("="^60)
-        z_mid = 0.1
-        c1, c2, grid, xl, yl = create_filled_contour_slice(data, "w", "Z", z_mid, resolution)
-        plot_filled_contours(c1, c2, grid, xl, yl, "w", "Z", z_mid, "correct_output/w_slice_$(resolution).png")
-
-        # Test 2: Reynolds stress
-        println("\n" * "="^60)
-        println("GENERATING REYNOLDS STRESS PLOT")
-        println("="^60)
-        c1, c2, rs_grid, xl, yl = calculate_reynolds_stress_contours(data, "uv", "Y", resolution)
-        plot_filled_contours(c1, c2, rs_grid, xl, yl, "Reynolds Stress <u'v'>", "Y-avg", 0.0, "correct_output/reynolds_uv_$(resolution).png")
+        # Process Reynolds stress components
+        for comp in reynolds_components
+            if comp in ["uv", "uw", "vw", "uu", "vv", "ww"] && !isempty(comp)
+                println("\n--- Processing Reynolds stress: $comp ---")
+                c1, c2, rs_grid, xl, yl = calculate_reynolds_stress_contours(data, comp, "Y", args["resolution"])
+                output_file = joinpath(output_dir, "$(file_base)_reynolds_$(comp)_$(args["resolution"]).png")
+                plot_filled_contours(c1, c2, rs_grid, xl, yl, "Reynolds <$(comp)'>", "Y-avg", 0.0, output_file)
+            elseif !isempty(comp)
+                println("Skipping unknown Reynolds stress component: $comp (valid: uv, uw, vw, uu, vv, ww)")
+            end
+        end
         
-        println("\n" * "="^70)
-        println("✓ Analysis successful!")
-        println("Files saved with resolution $(resolution)×$(resolution):")
-        println("  • correct_output/w_slice_$(resolution).png")
-        println("  • correct_output/reynolds_uv_$(resolution).png")
-        println("="^70)
+        println("✓ Successfully processed: $pvtu_file")
+        return true
         
     catch e
-        println("\n✗ FAILED: $e"); 
+        println("✗ FAILED processing $pvtu_file: $e")
         showerror(stdout, e, catch_backtrace())
+        return false
     end
 end
 
-# Command line argument processing
-function parse_command_line_args()
-    """Parse command line arguments for batch processing"""
-    if length(ARGS) > 0
-        try
-            resolution = parse(Int, ARGS[1])
-            if resolution < 50 || resolution > 2000
-                println("Warning: Resolution $(resolution) outside recommended range (50-2000)")
+function main()
+    """Main function for batch processing"""
+    args = parse_commandline()
+    
+    println("="^80)
+    println("BATCH PVTU ANALYSIS - Process $(args["process-id"])")
+    println("Started: $(Dates.now())")
+    println("="^80)
+    
+    # Print configuration
+    println("Configuration:")
+    for (key, value) in args
+        println("  $key: $value")
+    end
+    println()
+    
+    # Determine files to process
+    local available_files::Vector{String}
+    local missing_files::Vector{Int} = Int[]
+    
+    if args["range"] !== nothing && length(args["range"]) == 3
+        start_idx, end_idx, step = args["range"]
+        available_files, missing_files = find_pvtu_files(args["file-prefix"], start_idx, end_idx, step)
+        
+        println("File range: $(start_idx):$(step):$(end_idx)")
+        println("Available files: $(length(available_files))")
+        if !isempty(missing_files)
+            println("Missing files (indices): $(missing_files)")
+        end
+        
+    else
+        # Process all PVTU files in current directory
+        available_files = filter(f -> endswith(f, ".pvtu"), readdir("."))
+        println("Processing all PVTU files in current directory: $(length(available_files)) files")
+        
+        if isempty(available_files)
+            println("No PVTU files found in current directory!")
+            println("Current directory contents:")
+            for file in readdir(".")
+                if contains(file, args["file-prefix"]) || endswith(file, ".pvtu")
+                    println("  $file")
+                end
             end
-            return resolution
-        catch
-            println("Invalid resolution argument: $(ARGS[1])")
-            println("Usage: julia script.jl [resolution]")
-            return nothing
         end
     end
-    return nothing
+    
+    # Handle dry run
+    if args["dry-run"]
+        println("\nDRY RUN - Files that would be processed:")
+        for file in available_files
+            println("  $file")
+        end
+        println("\nTotal: $(length(available_files)) files")
+        return
+    end
+    
+    if isempty(available_files)
+        println("No files to process!")
+        println("\nTroubleshooting:")
+        println("1. Check if you're in the correct directory")
+        println("2. Verify PVTU files exist with prefix '$(args["file-prefix"])'")
+        println("3. Use --range START END STEP to specify file range")
+        println("4. Use --dry-run to see what files would be processed")
+        return
+    end
+    
+    # Process files
+    successful = 0
+    failed = 0
+    start_time = time()
+    
+    for (i, file) in enumerate(available_files)
+        println("\n[$(i)/$(length(available_files))] Processing: $file")
+        
+        if process_single_file(file, args, args["process-id"])
+            successful += 1
+        else
+            failed += 1
+        end
+        
+        # Progress update
+        elapsed = time() - start_time
+        avg_time_per_file = elapsed / i
+        estimated_remaining = avg_time_per_file * (length(available_files) - i)
+        
+        println("Progress: $(i)/$(length(available_files)) files completed")
+        println("Elapsed: $(round(elapsed/60, digits=2)) min, Estimated remaining: $(round(estimated_remaining/60, digits=2)) min")
+    end
+    
+    # Final summary
+    total_time = time() - start_time
+    println("\n" * "="^80)
+    println("BATCH PROCESSING COMPLETE - Process $(args["process-id"])")
+    println("="^80)
+    println("Total files processed: $(length(available_files))")
+    println("Successful: $successful")
+    println("Failed: $failed")
+    println("Total time: $(round(total_time/60, digits=2)) minutes")
+    println("Average time per file: $(round(total_time/length(available_files), digits=2)) seconds")
+    println("Finished: $(Dates.now())")
+    println("="^80)
 end
 
+# Run main function
 if abspath(PROGRAM_FILE) == @__FILE__
     try
-        using NearestNeighbors, GLMakie, ColorSchemes
+        using NearestNeighbors, GLMakie, ColorSchemes, ArgParse, Dates
     catch
-        using Pkg; 
-        Pkg.add.(["NearestNeighbors", "GLMakie", "ColorSchemes"]); 
-        using NearestNeighbors, GLMakie, ColorSchemes
+        using Pkg
+        Pkg.add.(["NearestNeighbors", "GLMakie", "ColorSchemes", "ArgParse", "Dates"])
+        using NearestNeighbors, GLMakie, ColorSchemes, ArgParse, Dates
     end
     
     main()
