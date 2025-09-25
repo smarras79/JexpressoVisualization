@@ -48,8 +48,8 @@ BATCH_CONFIG = {
     #==============================================================================
     # SLICING OR AVERAGING?
     #==============================================================================
-    #'analysis_mode': 'averaging',  # 'averaging' or 'slicing'
-    'analysis_mode': 'slicing',  # 'averaging' or 'slicing'
+    'analysis_mode': 'averaging',  # 'averaging' or 'slicing'
+    #'analysis_mode': 'slicing',  # 'averaging' or 'slicing'
 
     #==============================================================================
     # AVERAGING
@@ -82,7 +82,9 @@ BATCH_CONFIG = {
 PROCESSING_OPTIONS = {
     'output_directory': './batch_output/',
     'continue_on_error': True,
+    #'paraview_executable': 'pvpython',
     'paraview_executable': '/Applications/ParaView-5.11.2.app/Contents/bin/pvpython',
+    'paraview_args': ['--force-offscreen-rendering'],
     'timeout_seconds': 300,  # 5 minutes per file
     'log_file': 'batch_processing.log'
 }
@@ -576,10 +578,16 @@ def process_files():
             try:
                 # Run subprocess
                 logger.info("  Starting ParaView subprocess...")
-                result = subprocess.run([
+                if PROCESSING_OPTIONS['paraview_args']:
+                    result = subprocess.run([PROCESSING_OPTIONS['paraview_executable']] +  
+                    PROCESSING_OPTIONS['paraview_args'] + [temp_script_path], 
+                    capture_output=True, text=True, timeout=PROCESSING_OPTIONS['timeout_seconds'])
+
+                else: 
+                    result = subprocess.run([
                     PROCESSING_OPTIONS['paraview_executable'],
-                    temp_script_path
-                ], capture_output=True, text=True, timeout=PROCESSING_OPTIONS['timeout_seconds'])
+                    temp_script_path], 
+                    capture_output=True, text=True, timeout=PROCESSING_OPTIONS['timeout_seconds'])
                 
                 if result.returncode == 0:
                     logger.info(f"  ✓ Success: {Path(output_file).name}")
