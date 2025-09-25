@@ -91,7 +91,8 @@ const BATCH_CONFIG = Dict{String, Any}(
 const PROCESSING_OPTIONS = Dict{String, Any}(
     "output_directory" => "./batch_output/",
     "continue_on_error" => true,
-    "paraview_executable" => "/Applications/ParaView-5.11.2.app/Contents/bin/pvpython",
+    # **FIXED**: Use the generic command name for cluster compatibility
+    "paraview_executable" => "pvpython",
     "paraview_args" => ["--force-offscreen-rendering"],
     "timeout_seconds" => 400,
     "log_file_prefix" => "batch_processing"
@@ -172,43 +173,18 @@ Logging.handle_message(logger::TeeLogger, args...; kwargs...) = for l in logger.
 Logging.shouldlog(logger::TeeLogger, args...) = any(Logging.shouldlog(l, args...) for l in logger.loggers)
 Logging.min_enabled_level(logger::TeeLogger) = minimum(Logging.min_enabled_level(l) for l in logger.loggers)
 
-# *** THIS IS THE CORRECTED FUNCTION ***
 function extract_number_from_filename(filepath::String)
-    """Extract number from filename, first by template, then by general search."""
     filename = basename(filepath)
     template = FILE_PATTERNS["file_template"]
-
-    # 1. Try to match the specific template
     regex_template = replace(replace(template, r"[.^$*+?{}[\]\\|()\-]" => s"\\&"), "{}" => raw"([+-]?(?:\d+\.?\d*|\.\d+))")
     m = match(Regex(regex_template), filename)
     if m !== nothing
-        try
-            num_str = m.captures[1]
-            try
-                return parse(Int, num_str)
-            catch
-                return parse(Float64, num_str)
-            end
-        catch
-             # Fall through to the general search
-        end
+        try; num_str = m.captures[1]; return parse(Int, num_str) catch; return parse(Float64, num_str) end; catch; end
     end
-
-    # 2. Fallback: find the first number in the filename
     m_fallback = match(r"([+-]?(?:\d+\.?\d*|\.\d+))", filename)
     if m_fallback !== nothing
-        try
-            num_str = m_fallback.captures[1]
-            try
-                return parse(Int, num_str)
-            catch
-                return parse(Float64, num_str)
-            end
-        catch
-            # Fall through to returning 0
-        end
+        try; num_str = m_fallback.captures[1]; return parse(Int, num_str) catch; return parse(Float64, num_str) end; catch; end
     end
-
     @warn "Could not extract a number from filename: $filename. Defaulting to 0."
     return 0
 end
@@ -454,35 +430,55 @@ if __name__ == "__main__":
 """
 end
 
-function process_file(input_file::String, output_dir::String)
+# *** THIS IS THE CORRECTED FUNCTION ***
+function process_file(input_file::String, output_dir::String, process_id::Union{Int, Nothing})
     output_file = generate_output_filename(input_file, output_dir)
     @info "Processing: $(basename(input_file)) -> $(basename(output_file))"
-    script_content = generate_processing_script(input_file, output_file)
-    temp_script_path = "temp_paraview_script.py"
+
+    # Use the process_id for a unique filename, fallback to system PID if not provided
+    pid_for_file = process_id !== nothing ? process_id : getpid()
+    temp_script_path = "temp_paraview_script_$(pid_for_file).py"
+
     try
+        script_content = generate_processing_script(input_file, output_file)
         open(temp_script_path, "w") do f; write(f, script_content); end
+        
         pvpython_exe = PROCESSING_OPTIONS["paraview_executable"]
         pvpython_args = PROCESSING_OPTIONS["paraview_args"]
         cmd = `$pvpython_exe $pvpython_args $temp_script_path`
+        
         output = Pipe()
         proc = run(pipeline(cmd, stdout=output, stderr=output), wait=false)
         close(output.in)
         output_task = @async read(output, String)
+        
         start_time = time()
         while process_running(proc)
-            if time() - start_time > PROCESSING_OPTIONS["timeout_seconds"]; @error "Processing timed out for $input_file."; kill(proc); return false; end
+            if time() - start_time > PROCESSING_OPTIONS["timeout_seconds"]
+                @error "Processing timed out for $input_file."; kill(proc); return false
+            end
             sleep(1)
         end
+        
         proc_output = fetch(output_task)
         if proc.exitcode != 0
-            @error "ParaView script failed for $input_file with exit code $(proc.exitcode)."; @error "See full pvpython output below:\n$proc_output"; return false
+            @error "ParaView script failed for $input_file with exit code $(proc.exitcode)."; @error "Full pvpython output:\n$proc_output"; return false
         end
+
         @info "Successfully processed $input_file."
         return true
-    catch e; @error "An error occurred while processing $input_file: $e"; return false
-    finally; isfile(temp_script_path) && rm(temp_script_path); end
+    catch e
+        @error "An error occurred while processing $input_file: $e"
+        return false
+    finally
+        # This check prevents an error if the script failed before creating the temp file
+        if isfile(temp_script_path)
+            rm(temp_script_path)
+        end
+    end
 end
 
+# *** THIS IS THE CORRECTED FUNCTION ***
 function main()
     args = parse_arguments()
     log_io = setup_logging(args["process-id"], args["log-level"])
@@ -502,11 +498,15 @@ function main()
             if args["skip-existing"] && isfile(generate_output_filename(file_path, output_dir))
                 @info "Output file exists, skipping."; continue
             end
-            if process_file(file_path, output_dir); success_count += 1
+            
+            # Pass the process-id from args to the processing function
+            if process_file(file_path, output_dir, args["process-id"]); success_count += 1
             else; error_count += 1; if !PROCESSING_OPTIONS["continue_on_error"]; @error "Stopping due to error."; break; end; end
         end
         @info "=========================================="; @info "Batch processing finished."; @info "Successfully processed: $success_count"; @info "Errors: $error_count"; @info "=========================================="
-    finally; close(log_io); end
+    finally
+        close(log_io)
+    end
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
