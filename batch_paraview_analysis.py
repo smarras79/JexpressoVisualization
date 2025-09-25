@@ -3,7 +3,13 @@
 
 TO RUN THIS, simply use:
 
-   > python3.10 batch_paraview_analysis.py
+On Wulver:
+
+1. runinteractive
+2. ml foss/2024a ParaView
+3. in the script below:
+'paraview_executable': '/Applications/ParaView-5.11.2.app/Contents/bin/pvpython',
+4. python3.10 batch_paraview_analysis.py
 
 Working ParaView Batch Processor with subprocess isolation
 
@@ -82,8 +88,8 @@ BATCH_CONFIG = {
 PROCESSING_OPTIONS = {
     'output_directory': './batch_output/',
     'continue_on_error': True,
-    #'paraview_executable': 'pvpython',
-    'paraview_executable': '/Applications/ParaView-5.11.2.app/Contents/bin/pvpython',
+    'paraview_executable': 'pvpython',
+    #'paraview_executable': '/Applications/ParaView-5.11.2.app/Contents/bin/pvpython',
     'paraview_args': ['--force-offscreen-rendering'],
     'timeout_seconds': 300,  # 5 minutes per file
     'log_file': 'batch_processing.log'
