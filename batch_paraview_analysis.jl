@@ -22,7 +22,12 @@ const FILE_PATTERNS = Dict{String, Any}(
 )
 
 const BATCH_CONFIG = Dict{String, Any}(
-    "analysis_mode" => "reynolds_stress",
+    "analysis_mode" => "reynolds_stress",  # "averaging", "slicing", or "reynolds_stress"
+    "averaging" => Dict{String, Any}(
+        "data_array" => "VELOMAG",
+        "axis" => "Y",
+        "resolution" => [150, 150, 150],
+    ),
     "slicing" => Dict{String, Any}(
         "data_array" => "w",
         "axis" => "Z",
@@ -149,12 +154,14 @@ function generate_output_filename(input_file::String, output_dir::String)
     number_str = isa(file_number, Int) ? @sprintf("%06d", file_number) : replace(@sprintf("%08.3f", file_number), "." => "_")
     mode = BATCH_CONFIG["analysis_mode"]; local filename
     if mode == "slicing"; config = BATCH_CONFIG["slicing"]; filename = "$(config["data_array"])_slice_$(config["axis"])_$(number_str).png"
+    elseif mode == "averaging"; config = BATCH_CONFIG["averaging"]; filename = "$(config["data_array"])_avg_$(config["axis"])_$(number_str).png"
     elseif mode == "reynolds_stress"; config = BATCH_CONFIG["reynolds_stress"]; filename = "RS_$(config["component"])_avg_$(config["averaging_axis"])_$(number_str).png"
     else; filename = "output_$(number_str).png"
     end
     return joinpath(output_dir, filename)
 end
 
+# *** THIS IS THE FULLY IMPLEMENTED FUNCTION ***
 function generate_processing_script(input_file::String, output_file::String)
     input_abs = abspath(input_file)
     output_abs = abspath(output_file)
@@ -175,19 +182,29 @@ function generate_processing_script(input_file::String, output_file::String)
         coordinate = config["coordinate"]
         if data_array == "VELOMAG"; velomag_calc = "        source = Calculator(Input=reader, ResultArrayName='VELOMAG', Function='sqrt(u*u+v*v+w*w)')"; end
         analysis_code = """
+        # Slicing analysis
         axis = '$axis'.upper()
         coordinate = $(coordinate === nothing ? "None" : coordinate)
         if coordinate is None:
             bounds = source.GetDataInformation().GetBounds()
             bounds_idx = {'X': [0, 1], 'Y': [2, 3], 'Z': [4, 5]}[axis]
             coordinate = (bounds[bounds_idx[0]] + bounds[bounds_idx[1]]) / 2.0
+        
+        print(f"Creating slice at {axis} = {coordinate}")
         slice_filter = Slice(Input=source, SliceType='Plane')
-        if axis == 'X': slice_filter.SliceType.Origin = [coordinate, 0, 0]; slice_filter.SliceType.Normal = [1, 0, 0]
-        elif axis == 'Y': slice_filter.SliceType.Origin = [0, coordinate, 0]; slice_filter.SliceType.Normal = [0, 1, 0]
-        else: slice_filter.SliceType.Origin = [0, 0, coordinate]; slice_filter.SliceType.Normal = [0, 0, 1]
+        if axis == 'X':
+            slice_filter.SliceType.Origin = [coordinate, 0, 0]
+            slice_filter.SliceType.Normal = [1, 0, 0]
+        elif axis == 'Y':
+            slice_filter.SliceType.Origin = [0, coordinate, 0]
+            slice_filter.SliceType.Normal = [0, 1, 0]
+        else: # Z
+            slice_filter.SliceType.Origin = [0, 0, coordinate]
+            slice_filter.SliceType.Normal = [0, 0, 1]
+        
         source = slice_filter
         """
-        camera_code = "if '$axis'.upper() == 'X': view.CameraPosition = [10,0,0]; view.CameraViewUp = [0,0,1]\nelif '$axis'.upper() == 'Y': view.CameraPosition = [0,10,0]; view.CameraViewUp = [0,0,1]\nelse: view.CameraPosition = [0,0,10]; view.CameraViewUp = [0,1,0]"
+        camera_code = "if '$axis'.upper() == 'X': view.CameraPosition = [10,0,0]; view.CameraViewUp = [0,0,1]\\nelif '$axis'.upper() == 'Y': view.CameraPosition = [0,10,0]; view.CameraViewUp = [0,0,1]\\nelse: view.CameraPosition = [0,0,10]; view.CameraViewUp = [0,1,0]"
 
     elseif mode == "reynolds_stress"
         config = BATCH_CONFIG["reynolds_stress"]
@@ -195,6 +212,7 @@ function generate_processing_script(input_file::String, output_file::String)
         axis = config["averaging_axis"]
         resolution = config["resolution"]
         analysis_code = """
+        # Reynolds Stress Calculation
         from vtkmodules.numpy_interface import dataset_adapter as dsa
         from vtk.util.numpy_support import numpy_to_vtk
         import numpy as np
@@ -234,7 +252,7 @@ function generate_processing_script(input_file::String, output_file::String)
         producer = TrivialProducer(registrationName='FinalData'); producer.GetClientSideObject().SetOutput(sgrid)
         source=producer
         """
-        camera_code = "if '$axis'.upper() == 'X': view.CameraPosition = [10,0,0]; view.CameraViewUp = [0,0,1]\nelif '$axis'.upper() == 'Y': view.CameraPosition = [0,10,0]; view.CameraViewUp = [0,0,1]\nelse: view.CameraPosition = [0,0,10]; view.CameraViewUp = [0,1,0]"
+        camera_code = "if '$axis'.upper() == 'X': view.CameraPosition = [10,0,0]; view.CameraViewUp = [0,0,1]\\nelif '$axis'.upper() == 'Y': view.CameraPosition = [0,10,0]; view.CameraViewUp = [0,0,1]\\nelse: view.CameraPosition = [0,0,10]; view.CameraViewUp = [0,1,0]"
     end
 
     return """#!/usr/bin/env python3
@@ -286,7 +304,7 @@ function process_file(input_file::String, output_dir::String, process_id::Union{
             sleep(1)
         end
         proc_output = fetch(output_task)
-        if proc.exitcode != 0; @error "pvpython failed for $input_file.\nOutput:\n$proc_output"; return false; end
+        if proc.exitcode != 0; @error "pvpython failed for $input_file.\\nOutput:\\n$proc_output"; return false; end
         @info "Successfully processed $input_file."
         return true
     catch e; @error "Error processing $input_file: $e"; return false
@@ -301,7 +319,7 @@ function main()
         @info "Starting ParaView Batch Processor"; @info "Output directory: $output_dir"
         files_to_process = find_files(args)
         if isempty(files_to_process); @warn "No files found."; return; end
-        if args["dry-run"]; println("\n--- DRY RUN ---"); for f in files_to_process; println("- $(basename(f)) -> $(basename(generate_output_filename(f, output_dir)))"); end; return; end
+        if args["dry-run"]; println("\\n--- DRY RUN ---"); for f in files_to_process; println("- $(basename(f)) -> $(basename(generate_output_filename(f, output_dir)))"); end; return; end
         isdir(output_dir) || mkpath(output_dir)
         @info "Found $(length(files_to_process)) files."
         success, errors = 0, 0
