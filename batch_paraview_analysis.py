@@ -15,7 +15,7 @@ srun -p general -n 1 --ntasks-per-node=32 --qos=standard --account=smarras --tim
 3. in the script below:
 'paraview_executable': '/Applications/ParaView-5.11.2.app/Contents/bin/pvpython',
 
-4. python3.10 batch_paraview_analysis.py
+4. python3 batch_paraview_analysis.py
 ==============================================================================
 
 Working ParaView Batch Processor with subprocess isolation
