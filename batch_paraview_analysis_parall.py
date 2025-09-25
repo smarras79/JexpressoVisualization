@@ -16,8 +16,8 @@ Or with file lists:
 python3 batch_paraview_analysis.py --files iter_100.pvtu iter_150.pvtu iter_200.pvtu
 
 Wulver example:
-srun -p general -n 1 --ntasks-per-node=32 --qos=standard --account=smarras --time=59:00 python3 batch_paraview_analysis.py --range 100 300 5 &
-srun -p general -n 1 --ntasks-per-node=32 --qos=standard --account=smarras --time=59:00 python3 batch_paraview_analysis.py --range 305 500 5 &
+srun python3 batch_paraview_analysis.py --range 100 300 5 --process-id 1 &
+srun python3 batch_paraview_analysis.py --range 305 500 5 --process-id 2 &
 ==============================================================================
 """
 
@@ -344,7 +344,7 @@ def main():
         
         # Perform analysis
         if "{BATCH_CONFIG['analysis_mode']}" == 'averaging':
-            # [Complete averaging implementation from previous version]
+            # Averaging analysis
             axis = "{BATCH_CONFIG['averaging']['axis']}".upper()
             resolution = {BATCH_CONFIG['averaging']['resolution']}
             limits = {BATCH_CONFIG['averaging']['geometric_limits']}
@@ -476,7 +476,7 @@ def main():
             data_array = f"{{data_array}}_{{axis}}_avg"
             
         else:
-            # [Slicing implementation]
+            # Slicing analysis
             axis = "{BATCH_CONFIG['slicing']['axis']}".upper()
             coordinate = {BATCH_CONFIG['slicing']['coordinate'] if BATCH_CONFIG['slicing']['coordinate'] is not None else 'None'}
             
@@ -505,11 +505,12 @@ def main():
             
             source = slice_filter
         
-        # [Visualization code remains the same]
+        # Get arrays from processed source
         final_arrays = [source.GetPointDataInformation().GetArray(i).Name 
                        for i in range(source.GetPointDataInformation().GetNumberOfArrays())]
         print(f"Final arrays available: {{', '.join(final_arrays)}}")
         
+        # Visualize
         print("Creating visualization...")
         view = GetActiveViewOrCreate('RenderView')
         view.ViewSize = {BATCH_CONFIG['visualization']['image_size']}
@@ -517,6 +518,7 @@ def main():
         display = Show(source, view)
         display.Representation = 'Surface'
         
+        # Color by data array
         if data_array in final_arrays:
             array_name = data_array
         elif final_arrays:
@@ -534,18 +536,24 @@ def main():
         lut = GetColorTransferFunction(array_name)
         lut.ApplyPreset("{BATCH_CONFIG['visualization']['color_map']}", True)
         
+        # Set camera based on analysis mode and axis
         if "{BATCH_CONFIG['analysis_mode']}" == 'averaging':
+            # Camera setup for averaging
             avg_axis = "{BATCH_CONFIG['averaging']['axis']}".upper()
             if avg_axis == 'X':
+                # Viewing Y-Z plane
                 view.CameraPosition = [1, 0, 0]
                 view.CameraViewUp = [0, 0, 1]
             elif avg_axis == 'Y':
+                # Viewing X-Z plane  
                 view.CameraPosition = [0, 1, 0]
                 view.CameraViewUp = [0, 0, 1]
-            else:
+            else:  # Z
+                # Viewing X-Y plane
                 view.CameraPosition = [0, 0, 1]
                 view.CameraViewUp = [0, 1, 0]
         else:
+            # Camera setup for slicing
             slice_axis = "{BATCH_CONFIG['slicing']['axis']}".upper()
             if slice_axis == 'X':
                 view.CameraPosition = [1, 0, 0]
@@ -553,7 +561,7 @@ def main():
             elif slice_axis == 'Y':
                 view.CameraPosition = [0, 1, 0]
                 view.CameraViewUp = [0, 0, 1]
-            else:
+            else:  # Z
                 view.CameraPosition = [0, 0, 1]
                 view.CameraViewUp = [0, 1, 0]
         
@@ -562,9 +570,11 @@ def main():
         view.ResetCamera()
         view.StillRender()
         
+        # Save screenshot
         print(f"Saving to: {{r'{output_abs}'}}")
         SaveScreenshot(r"{output_abs}", view, ImageResolution={BATCH_CONFIG['visualization']['image_size']})
         
+        # Verify output file
         if os.path.exists(r"{output_abs}"):
             size = os.path.getsize(r"{output_abs}")
             print(f"Output file size: {{size}} bytes")
@@ -591,33 +601,89 @@ if __name__ == "__main__":
     
     return script_content
 
-def create_parallel_script(output_dir, ranges):
-    """Create a helper script for launching parallel processes."""
-    script_content = f"""#!/bin/bash
-# Auto-generated parallel processing script
-# Run this to process files in parallel
-
-"""
+def suggest_parallel_ranges(files, num_processes=4):
+    """Suggest how to split files across multiple processes."""
+    if not files:
+        print("No files found to suggest ranges for.")
+        return
     
-    for i, (start, end, step) in enumerate(ranges):
-        script_content += f"""
-# Process {i+1}: files {start} to {end} (step {step})
-python3 batch_paraview_analysis.py --range {start} {end} {step} --process-id {i+1} &
-"""
+    print(f"\nSuggested parallel processing with {num_processes} processes:")
+    print("=" * 60)
     
-    script_content += """
-# Wait for all background processes to complete
-wait
-
-echo "All parallel processing completed!"
-"""
+    # Extract numbers and sort them
+    file_numbers = []
+    for f in files:
+        num = extract_number_from_filename(f)
+        file_numbers.append(num)
     
-    script_path = output_dir / "run_parallel.sh"
-    with open(script_path, 'w') as f:
-        f.write(script_content)
+    if not file_numbers:
+        return
     
-    os.chmod(script_path, 0o755)  # Make executable
-    return script_path
+    file_numbers.sort()
+    min_num, max_num = file_numbers[0], file_numbers[-1]
+    total_files = len(file_numbers)
+    files_per_process = total_files // num_processes
+    
+    print(f"Total files: {total_files}")
+    print(f"File numbers range: {min_num} to {max_num}")
+    print(f"Files per process: ~{files_per_process}")
+    print()
+    
+    # Split files into chunks
+    chunk_size = len(file_numbers) // num_processes
+    remainder = len(file_numbers) % num_processes
+    
+    ranges = []
+    start_idx = 0
+    
+    for i in range(num_processes):
+        # Distribute remainder across first processes
+        current_chunk_size = chunk_size + (1 if i < remainder else 0)
+        end_idx = start_idx + current_chunk_size - 1
+        
+        if start_idx >= len(file_numbers):
+            break
+            
+        start_num = file_numbers[start_idx]
+        end_num = file_numbers[min(end_idx, len(file_numbers) - 1)]
+        
+        # Calculate appropriate step size based on actual file numbers
+        if start_idx == end_idx:
+            step = 1
+        else:
+            # Find the most common step size in this range
+            steps = []
+            for j in range(start_idx, min(end_idx, len(file_numbers) - 1)):
+                steps.append(file_numbers[j+1] - file_numbers[j])
+            
+            if steps:
+                # Use the minimum step as a safe choice
+                step = min(steps)
+            else:
+                step = 1
+        
+        # Ensure step is at least 1
+        step = max(1, step)
+        
+        ranges.append((start_num, end_num, step))
+        
+        file_count = len([n for n in file_numbers[start_idx:end_idx+1]])
+        print(f"Process {i+1}: python3 batch_paraview_analysis.py --range {start_num} {end_num} {step} --process-id {i+1} &")
+        print(f"           # Will process ~{file_count} files")
+        
+        start_idx = end_idx + 1
+    
+    print()
+    print("To run all processes:")
+    print("#!/bin/bash")
+    for i, (start_num, end_num, step) in enumerate(ranges):
+        print(f"python3 batch_paraview_analysis.py --range {start_num} {end_num} {step} --process-id {i+1} &")
+    print("wait  # Wait for all processes to complete")
+    print()
+    print("Or use the dry-run flag to test first:")
+    print("python3 batch_paraview_analysis.py --range START END STEP --dry-run")
+    
+    return ranges
 
 def process_files():
     """Process all files using subprocess isolation."""
@@ -769,90 +835,6 @@ def process_files():
             logger.info(f"  {f.name}")
         if len(output_files) > 5:
             logger.info(f"  ... and {len(output_files) - 5} more")
-
-def suggest_parallel_ranges(files, num_processes=4):
-    """Suggest how to split files across multiple processes."""
-    if not files:
-        print("No files found to suggest ranges for.")
-        return
-    
-    print(f"\nSuggested parallel processing with {num_processes} processes:")
-    print("=" * 60)
-    
-    # Extract numbers and sort them
-    file_numbers = []
-    for f in files:
-        num = extract_number_from_filename(f)
-        file_numbers.append(num)
-    
-    if not file_numbers:
-        return
-    
-    file_numbers.sort()
-    min_num, max_num = file_numbers[0], file_numbers[-1]
-    total_files = len(file_numbers)
-    files_per_process = total_files // num_processes
-    
-    print(f"Total files: {total_files}")
-    print(f"File numbers range: {min_num} to {max_num}")
-    print(f"Files per process: ~{files_per_process}")
-    print()
-    
-    # Split files into chunks
-    chunk_size = len(file_numbers) // num_processes
-    remainder = len(file_numbers) % num_processes
-    
-    ranges = []
-    start_idx = 0
-    
-    for i in range(num_processes):
-        # Distribute remainder across first processes
-        current_chunk_size = chunk_size + (1 if i < remainder else 0)
-        end_idx = start_idx + current_chunk_size - 1
-        
-        if start_idx >= len(file_numbers):
-            break
-            
-        start_num = file_numbers[start_idx]
-        end_num = file_numbers[min(end_idx, len(file_numbers) - 1)]
-        
-        # Calculate appropriate step size based on actual file numbers
-        if start_idx == end_idx:
-            step = 1
-        else:
-            # Find the most common step size in this range
-            steps = []
-            for j in range(start_idx, min(end_idx, len(file_numbers) - 1)):
-                steps.append(file_numbers[j+1] - file_numbers[j])
-            
-            if steps:
-                # Use the minimum step as a safe choice
-                step = min(steps)
-            else:
-                step = 1
-        
-        # Ensure step is at least 1
-        step = max(1, step)
-        
-        ranges.append((start_num, end_num, step))
-        
-        file_count = len([n for n in file_numbers[start_idx:end_idx+1]])
-        print(f"Process {i+1}: python3 batch_paraview_analysis.py --range {start_num} {end_num} {step} --process-id {i+1} &")
-        print(f"           # Will process ~{file_count} files")
-        
-        start_idx = end_idx + 1
-    
-    print()
-    print("To run all processes:")
-    print("#!/bin/bash")
-    for i, (start_num, end_num, step) in enumerate(ranges):
-        print(f"python3 batch_paraview_analysis.py --range {start_num} {end_num} {step} --process-id {i+1} &")
-    print("wait  # Wait for all processes to complete")
-    print()
-    print("Or use the dry-run flag to test first:")
-    print("python3 batch_paraview_analysis.py --range START END STEP --dry-run")
-    
-    return ranges
 
 if __name__ == "__main__":
     args = parse_arguments()

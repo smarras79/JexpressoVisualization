@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
 """
+Parallel-Enabled ParaView Batch Processor
 
-TO RUN THIS, simply use:
-
+TO RUN THIS:
 ==============================================================================
-On Wulver:
-==============================================================================
-# BATCH PROCESSING CONFIGURATION
-1. runinteractive:
-srun -p general -n 1 --ntasks-per-node=32 --qos=standard --account=smarras --time=59:00 --pty bash
+Single process (auto-detect all files):
+python3 batch_paraview_analysis.py
 
-2. ml foss/2024a ParaView
+Parallel processing with specific ranges:
+python3 batch_paraview_analysis.py --range 100 200 2  # files 100-200, step 2
+python3 batch_paraview_analysis.py --range 300 400 2  # files 300-400, step 2
+python3 batch_paraview_analysis.py --range 500 600 2  # files 500-600, step 2
 
-3. in the script below:
-'paraview_executable': '/Applications/ParaView-5.11.2.app/Contents/bin/pvpython',
+Or with file lists:
+python3 batch_paraview_analysis.py --files iter_100.pvtu iter_150.pvtu iter_200.pvtu
 
-4. python3 batch_paraview_analysis.py
-==============================================================================
-
-Working ParaView Batch Processor with subprocess isolation
-
-This approach runs each file in a separate ParaView process to completely
-avoid state conflicts between files. Each file gets a fresh ParaView session.
+Wulver example:
+srun python3 batch_paraview_analysis.py --range 100 300 5 --process-id 1 &
+srun python3 batch_paraview_analysis.py --range 305 500 5 --process-id 2 &
 ==============================================================================
 """
 
@@ -32,6 +28,7 @@ import glob
 import re
 import tempfile
 import logging
+import argparse
 from pathlib import Path
 from datetime import datetime
 
@@ -44,18 +41,16 @@ FILE_PATTERNS = {
     'pattern_type': 'iteration',
     'base_directory': './',
     'file_template': 'iter_{}.pvtu',
-    'number_range': None,  # None for auto-detection, or [start, end, step]
+    'number_range': None,  # Will be set by command line args or auto-detect
 }
 
 # --- Analysis Configuration ---
 BATCH_CONFIG = {
-
-    
     #==============================================================================
     # SELECT VARIABLE
     #==============================================================================
-    #'data_array': 'w',
     'data_array': 'VELOMAG',
+    #'data_array': 'w',
     #'data_array': 'θ',
     #'data_array': 'ρ',
     
@@ -100,24 +95,90 @@ PROCESSING_OPTIONS = {
     #'paraview_executable': '/Applications/ParaView-5.11.2.app/Contents/bin/pvpython',
     'paraview_args': ['--force-offscreen-rendering'],
     'timeout_seconds': 300,  # 5 minutes per file
-    'log_file': 'batch_processing.log'
+    'log_file_prefix': 'batch_processing',  # Will add process ID
 }
+
+#==============================================================================
+# COMMAND LINE ARGUMENT PARSING
+#==============================================================================
+
+def parse_arguments():
+    """Parse command line arguments for parallel processing."""
+    parser = argparse.ArgumentParser(
+        description='ParaView Batch Processor with Parallel Support',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Auto-detect all files
+  python3 batch_paraview_analysis.py
+  
+  # Process specific range
+  python3 batch_paraview_analysis.py --range 100 200 2
+  
+  # Process specific files
+  python3 batch_paraview_analysis.py --files iter_100.pvtu iter_200.pvtu
+  
+  # Show what files would be processed
+  python3 batch_paraview_analysis.py --range 100 200 5 --dry-run
+  
+  # Suggest parallel processing ranges
+  python3 batch_paraview_analysis.py --suggest-parallel
+  
+  # Parallel processing on cluster
+  python3 batch_paraview_analysis.py --range 100 299 5 --process-id 1 &
+  python3 batch_paraview_analysis.py --range 300 499 5 --process-id 2 &
+  python3 batch_paraview_analysis.py --range 500 699 5 --process-id 3 &
+  wait  # Wait for all background processes to complete
+        """
+    )
+    
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--range', nargs=3, type=int, metavar=('START', 'END', 'STEP'),
+                       help='Process files in range: start end step')
+    group.add_argument('--files', nargs='+', metavar='FILE',
+                       help='Process specific files')
+    group.add_argument('--suggest-parallel', action='store_true',
+                       help='Suggest how to split files across multiple processes')
+    
+    parser.add_argument('--process-id', type=int, default=None,
+                       help='Process ID for parallel runs (affects log file naming)')
+    parser.add_argument('--output-dir', type=str, default=None,
+                       help='Override output directory')
+    parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                       default='INFO', help='Set logging level')
+    parser.add_argument('--dry-run', action='store_true',
+                       help='Show what files would be processed without actually processing')
+    parser.add_argument('--skip-existing', action='store_true', default=True,
+                       help='Skip files that already have output (default: True)')
+    parser.add_argument('--num-processes', type=int, default=4,
+                       help='Number of parallel processes to suggest (default: 4)')
+    
+    return parser.parse_args()
 
 #==============================================================================
 # IMPLEMENTATION
 #==============================================================================
 
-def setup_logging():
+def setup_logging(process_id=None, log_level='INFO'):
     """Setup logging for the batch processor."""
+    # Create unique log file name for parallel processes
+    if process_id is not None:
+        log_file = f"{PROCESSING_OPTIONS['log_file_prefix']}_proc_{process_id:03d}.log"
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = f"{PROCESSING_OPTIONS['log_file_prefix']}_{timestamp}.log"
+    
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
+        level=getattr(logging, log_level),
+        format='%(asctime)s - PID:%(process)d - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler(PROCESSING_OPTIONS['log_file']),
+            logging.FileHandler(log_file),
             logging.StreamHandler(sys.stdout)
         ]
     )
-    return logging.getLogger(__name__)
+    logger = logging.getLogger(__name__)
+    logger.info(f"Logging to: {log_file}")
+    return logger
 
 def extract_number_from_filename(filepath):
     """Extract number from filename based on template pattern."""
@@ -151,16 +212,26 @@ def extract_number_from_filename(filepath):
     
     return 0
 
-def find_files():
-    """Find and sort files matching the pattern."""
+def find_files(args):
+    """Find and sort files based on command line arguments."""
     base_dir = Path(FILE_PATTERNS['base_directory'])
     template = FILE_PATTERNS['file_template']
-    number_range = FILE_PATTERNS.get('number_range', None)
     
-    if number_range is not None:
-        # Use specified range
+    if args.files:
+        # Use specific files provided
         files = []
-        start, end, step = number_range
+        for file_path in args.files:
+            abs_path = os.path.abspath(file_path)
+            if os.path.exists(abs_path):
+                files.append(abs_path)
+            else:
+                print(f"WARNING: File not found: {file_path}")
+        return files
+    
+    elif args.range:
+        # Use specified range
+        start, end, step = args.range
+        files = []
         current = start
         while current <= end:
             filename = base_dir / template.format(current)
@@ -170,7 +241,7 @@ def find_files():
         return sorted(files)
     
     else:
-        # Auto-detect files
+        # Auto-detect all files (original behavior)
         glob_pattern = template.replace('{}', '*')
         search_path = base_dir / glob_pattern
         matching_files = glob.glob(str(search_path))
@@ -201,7 +272,7 @@ def find_files():
         files_with_numbers.sort(key=lambda x: x[0])
         return [file_path for _, file_path in files_with_numbers]
 
-def generate_output_filename(input_file):
+def generate_output_filename(input_file, output_dir):
     """Generate output filename for the processed image."""
     file_number = extract_number_from_filename(input_file)
     
@@ -216,7 +287,6 @@ def generate_output_filename(input_file):
            else BATCH_CONFIG['slicing']['axis'])
     
     filename = f"{BATCH_CONFIG['data_array']}_{mode}_{axis}_{number_str}.png"
-    output_dir = Path(PROCESSING_OPTIONS['output_directory'])
     return str(output_dir / filename)
 
 def generate_processing_script(input_file, output_file):
@@ -281,17 +351,14 @@ def main():
             
             print(f"Starting {{axis}}-axis averaging...")
             
-            # Import required modules
             from vtkmodules.numpy_interface import dataset_adapter as dsa
             from vtk import vtkStructuredGrid, vtkPoints
             from vtk.util.numpy_support import numpy_to_vtk
             import numpy as np
             
-            # Get original bounds
             original_bounds = source.GetDataInformation().GetBounds()
             print(f"Original bounds: X=[{{original_bounds[0]:.2f}}, {{original_bounds[1]:.2f}}], Y=[{{original_bounds[2]:.2f}}, {{original_bounds[3]:.2f}}], Z=[{{original_bounds[4]:.2f}}, {{original_bounds[5]:.2f}}]")
             
-            # Apply geometric limits
             effective_bounds = list(original_bounds)
             for i, axis_name in enumerate(['X', 'Y', 'Z']):
                 axis_limits = limits.get(axis_name, [None, None])
@@ -302,12 +369,11 @@ def main():
             
             print(f"Effective bounds: X=[{{effective_bounds[0]:.2f}}, {{effective_bounds[1]:.2f}}], Y=[{{effective_bounds[2]:.2f}}, {{effective_bounds[3]:.2f}}], Z=[{{effective_bounds[4]:.2f}}, {{effective_bounds[5]:.2f}}]")
             
-            # Apply geometric clipping
             clipped_data = source
             for i, axis_name in enumerate(['X', 'Y', 'Z']):
                 axis_limits = limits.get(axis_name, [None, None])
                 
-                if axis_limits[0] is not None:  # Min limit
+                if axis_limits[0] is not None:
                     clip_min = Clip(Input=clipped_data)
                     clip_min.ClipType = 'Plane'
                     normal = [0, 0, 0]
@@ -319,7 +385,7 @@ def main():
                     clipped_data = clip_min
                     print(f"Applied {{axis_name}}_min = {{axis_limits[0]}}")
                     
-                if axis_limits[1] is not None:  # Max limit
+                if axis_limits[1] is not None:
                     clip_max = Clip(Input=clipped_data)
                     clip_max.ClipType = 'Plane'
                     normal = [0, 0, 0]
@@ -331,20 +397,17 @@ def main():
                     clipped_data = clip_max
                     print(f"Applied {{axis_name}}_max = {{axis_limits[1]}}")
             
-            # Resample to uniform grid
             print(f"Resampling to uniform grid {{resolution}}...")
             resampled = ResampleToImage(Input=clipped_data)
             resampled.SamplingDimensions = resolution
             resampled.SamplingBounds = effective_bounds
             resampled.UpdatePipeline()
             
-            # Extract and process data
             print("Processing 3D data for averaging...")
             from paraview.simple import servermanager
             vtk_data = servermanager.Fetch(resampled)
             wrapped_data = dsa.WrapDataObject(vtk_data)
             
-            # Get the data array
             available_arrays = [wrapped_data.PointData.GetArrayName(i) 
                                for i in range(wrapped_data.PointData.GetNumberOfArrays())]
             if data_array not in available_arrays:
@@ -355,33 +418,31 @@ def main():
             
             data_3d_flat = wrapped_data.PointData[actual_array_name]
             dims = resampled.SamplingDimensions
-            data_3d = data_3d_flat.reshape(dims[2], dims[1], dims[0])  # (Nz, Ny, Nx)
+            data_3d = data_3d_flat.reshape(dims[2], dims[1], dims[0])
             
             print(f"Data shape: {{data_3d.shape}}")
             
-            # Perform averaging based on axis
             axis_index = {{'X': 0, 'Y': 1, 'Z': 2}}[axis]
             
             if axis == 'X':
-                averaged_data_2d = np.mean(data_3d, axis=2)  # Average along X -> (Nz, Ny)
+                averaged_data_2d = np.mean(data_3d, axis=2)
                 result_axes = ['Y', 'Z']
-                grid_dims = [dims[1], dims[2]]  # (Ny, Nz)
-                bounds_indices = [2, 3, 4, 5]  # Y and Z bounds
+                grid_dims = [dims[1], dims[2]]
+                bounds_indices = [2, 3, 4, 5]
             elif axis == 'Y':
-                averaged_data_2d = np.mean(data_3d, axis=1)  # Average along Y -> (Nz, Nx)
+                averaged_data_2d = np.mean(data_3d, axis=1)
                 result_axes = ['X', 'Z']
-                grid_dims = [dims[0], dims[2]]  # (Nx, Nz)
-                bounds_indices = [0, 1, 4, 5]  # X and Z bounds
-            else:  # Z
-                averaged_data_2d = np.mean(data_3d, axis=0)  # Average along Z -> (Ny, Nx)
+                grid_dims = [dims[0], dims[2]]
+                bounds_indices = [0, 1, 4, 5]
+            else:
+                averaged_data_2d = np.mean(data_3d, axis=0)
                 result_axes = ['X', 'Y']
-                grid_dims = [dims[0], dims[1]]  # (Nx, Ny)
-                bounds_indices = [0, 1, 2, 3]  # X and Y bounds
+                grid_dims = [dims[0], dims[1]]
+                bounds_indices = [0, 1, 2, 3]
             
             print(f"Averaged data shape: {{averaged_data_2d.shape}}")
             print(f"Created {{result_axes[0]}}-{{result_axes[1]}} plane")
             
-            # Create structured grid for visualization
             n_axis1, n_axis2 = grid_dims
             structured_grid = vtkStructuredGrid()
             structured_grid.SetDimensions(n_axis1, n_axis2, 1)
@@ -391,14 +452,13 @@ def main():
             axis2_coords = np.linspace(effective_bounds[bounds_indices[2]], effective_bounds[bounds_indices[3]], n_axis2)
             avg_coord = (effective_bounds[axis_index*2] + effective_bounds[axis_index*2+1]) / 2.0
             
-            # Add points based on averaging axis
             for j in range(n_axis2):
                 for i in range(n_axis1):
                     if axis == 'X':
                         points.InsertNextPoint(avg_coord, axis1_coords[i], axis2_coords[j])
                     elif axis == 'Y':
                         points.InsertNextPoint(axis1_coords[i], avg_coord, axis2_coords[j])
-                    else:  # Z
+                    else:
                         points.InsertNextPoint(axis1_coords[i], axis2_coords[j], avg_coord)
             
             structured_grid.SetPoints(points)
@@ -407,7 +467,6 @@ def main():
             vtk_array.SetName(f"{{data_array}}_{{axis}}_avg")
             structured_grid.GetPointData().SetScalars(vtk_array)
             
-            # Create producer for visualization
             from paraview.simple import TrivialProducer
             producer = TrivialProducer(registrationName=f'{{axis}}_Averaged_Data')
             producer.GetClientSideObject().SetOutput(structured_grid)
@@ -542,25 +601,130 @@ if __name__ == "__main__":
     
     return script_content
 
+def suggest_parallel_ranges(files, num_processes=4):
+    """Suggest how to split files across multiple processes."""
+    if not files:
+        print("No files found to suggest ranges for.")
+        return
+    
+    print(f"\nSuggested parallel processing with {num_processes} processes:")
+    print("=" * 60)
+    
+    # Extract numbers and sort them
+    file_numbers = []
+    for f in files:
+        num = extract_number_from_filename(f)
+        file_numbers.append(num)
+    
+    if not file_numbers:
+        return
+    
+    file_numbers.sort()
+    min_num, max_num = file_numbers[0], file_numbers[-1]
+    total_files = len(file_numbers)
+    files_per_process = total_files // num_processes
+    
+    print(f"Total files: {total_files}")
+    print(f"File numbers range: {min_num} to {max_num}")
+    print(f"Files per process: ~{files_per_process}")
+    print()
+    
+    # Split files into chunks
+    chunk_size = len(file_numbers) // num_processes
+    remainder = len(file_numbers) % num_processes
+    
+    ranges = []
+    start_idx = 0
+    
+    for i in range(num_processes):
+        # Distribute remainder across first processes
+        current_chunk_size = chunk_size + (1 if i < remainder else 0)
+        end_idx = start_idx + current_chunk_size - 1
+        
+        if start_idx >= len(file_numbers):
+            break
+            
+        start_num = file_numbers[start_idx]
+        end_num = file_numbers[min(end_idx, len(file_numbers) - 1)]
+        
+        # Calculate appropriate step size based on actual file numbers
+        if start_idx == end_idx:
+            step = 1
+        else:
+            # Find the most common step size in this range
+            steps = []
+            for j in range(start_idx, min(end_idx, len(file_numbers) - 1)):
+                steps.append(file_numbers[j+1] - file_numbers[j])
+            
+            if steps:
+                # Use the minimum step as a safe choice
+                step = min(steps)
+            else:
+                step = 1
+        
+        # Ensure step is at least 1
+        step = max(1, step)
+        
+        ranges.append((start_num, end_num, step))
+        
+        file_count = len([n for n in file_numbers[start_idx:end_idx+1]])
+        print(f"Process {i+1}: python3 batch_paraview_analysis.py --range {start_num} {end_num} {step} --process-id {i+1} &")
+        print(f"           # Will process ~{file_count} files")
+        
+        start_idx = end_idx + 1
+    
+    print()
+    print("To run all processes:")
+    print("#!/bin/bash")
+    for i, (start_num, end_num, step) in enumerate(ranges):
+        print(f"python3 batch_paraview_analysis.py --range {start_num} {end_num} {step} --process-id {i+1} &")
+    print("wait  # Wait for all processes to complete")
+    print()
+    print("Or use the dry-run flag to test first:")
+    print("python3 batch_paraview_analysis.py --range START END STEP --dry-run")
+    
+    return ranges
+
 def process_files():
     """Process all files using subprocess isolation."""
     
-    logger = setup_logging()
+    args = parse_arguments()
+    logger = setup_logging(args.process_id, args.log_level)
     
-    print("ParaView Subprocess Batch Processor")
+    # Override output directory if specified
+    if args.output_dir:
+        PROCESSING_OPTIONS['output_directory'] = args.output_dir
+    
+    print("ParaView Parallel Batch Processor")
     print("=" * 50)
     print(f"Data array: {BATCH_CONFIG['data_array']}")
     print(f"Analysis mode: {BATCH_CONFIG['analysis_mode']}")
-    print(f"File pattern: {FILE_PATTERNS['file_template']}")
+    print(f"Process ID: {args.process_id or 'main'}")
+    
+    if args.range:
+        print(f"Range: {args.range[0]} to {args.range[1]} (step {args.range[2]})")
+    elif args.files:
+        print(f"Specific files: {len(args.files)} files")
+    else:
+        print("Mode: Auto-detect all files")
+    
     print("=" * 50)
     
-    # Find files
-    files = find_files()
+    # Find files based on arguments
+    files = find_files(args)
     if not files:
         logger.error("No files found to process")
         return
     
     logger.info(f"Found {len(files)} files to process")
+    
+    # Show files in dry-run mode
+    if args.dry_run:
+        print("\nDRY RUN - Files that would be processed:")
+        for f in files:
+            print(f"  {Path(f).name}")
+        return
+    
     for f in files:
         logger.info(f"  {Path(f).name}")
     
@@ -578,8 +742,16 @@ def process_files():
         
         try:
             # Generate output filename
-            output_file = generate_output_filename(input_file)
+            output_file = generate_output_filename(input_file, output_dir)
             logger.info(f"  Output: {Path(output_file).name}")
+            
+            # Skip if output already exists (useful for resuming parallel jobs)
+            if os.path.exists(output_file):
+                size = os.path.getsize(output_file)
+                if size > 1000:  # Reasonable size threshold
+                    logger.info(f"  ⏭  Skipping (output exists): {Path(output_file).name}")
+                    processed_count += 1
+                    continue
             
             # Generate processing script
             script_content = generate_processing_script(input_file, output_file)
@@ -596,7 +768,6 @@ def process_files():
                     result = subprocess.run([PROCESSING_OPTIONS['paraview_executable']] +  
                     PROCESSING_OPTIONS['paraview_args'] + [temp_script_path], 
                     capture_output=True, text=True, timeout=PROCESSING_OPTIONS['timeout_seconds'])
-
                 else: 
                     result = subprocess.run([
                     PROCESSING_OPTIONS['paraview_executable'],
@@ -617,7 +788,7 @@ def process_files():
                         logger.warning("    Output file not found")
                         
                     # Log subprocess output for debugging
-                    if result.stdout:
+                    if result.stdout and logger.level <= logging.DEBUG:
                         logger.debug(f"    Subprocess output: {result.stdout}")
                 else:
                     logger.error(f"  ✗ Failed: Return code {result.returncode}")
@@ -651,6 +822,7 @@ def process_files():
     total_time = datetime.now() - start_time
     logger.info("\n" + "=" * 50)
     logger.info("BATCH PROCESSING COMPLETE")
+    logger.info(f"Process ID: {args.process_id or 'main'}")
     logger.info(f"Total time: {total_time}")
     logger.info(f"Successfully processed: {processed_count} files")
     logger.info(f"Failed: {failed_count} files")
@@ -665,4 +837,11 @@ def process_files():
             logger.info(f"  ... and {len(output_files) - 5} more")
 
 if __name__ == "__main__":
-    process_files()
+    args = parse_arguments()
+    
+    # Special mode: suggest parallel ranges
+    if args.suggest_parallel:
+        files = find_files(args)
+        suggest_parallel_ranges(files, args.num_processes)
+    else:
+        process_files()
