@@ -112,9 +112,7 @@ function extract_number_from_filename(filepath::String)
         try
             num_str = m.captures[1]
             try return parse(Int, num_str) catch; return parse(Float64, num_str) end
-        catch
-            # Fall through
-        end
+        catch; end
     end
 
     # 2. Fallback to any number
@@ -123,9 +121,7 @@ function extract_number_from_filename(filepath::String)
         try
             num_str = m_fallback.captures[1]
             try return parse(Int, num_str) catch; return parse(Float64, num_str) end
-        catch
-            # Fall through
-        end
+        catch; end
     end
 
     @warn "Could not extract number from: $filename. Defaulting to 0."
@@ -161,7 +157,6 @@ function generate_output_filename(input_file::String, output_dir::String)
     return joinpath(output_dir, filename)
 end
 
-# *** THIS IS THE FULLY IMPLEMENTED FUNCTION ***
 function generate_processing_script(input_file::String, output_file::String)
     input_abs = abspath(input_file)
     output_abs = abspath(output_file)
@@ -223,7 +218,7 @@ function generate_processing_script(input_file::String, output_file::String)
         u, v, w = (wrapped_data_3d.PointData[c].reshape(dims[2],dims[1],dims[0]) for c in ['u','v','w'])
         axis_map = {'X': 2, 'Y': 1, 'Z': 0}
         avg_axis_idx = axis_map.get('$axis'.upper())
-        u_mean, v_mean, w_mean = (np.mean(c, axis=avg_axis_idx) for c in [u,v,w])
+        u_mean, v_mean, w_mean = (np.mean(c, axis=avg_axis_idx) for c in [u,v,w'])
         if avg_axis_idx == 2: u_mean_3d,v_mean_3d,w_mean_3d = (np.tile(c[:,:,np.newaxis],(1,1,dims[0])) for c in [u_mean,v_mean,w_mean])
         elif avg_axis_idx == 1: u_mean_3d,v_mean_3d,w_mean_3d = (np.tile(c[:,np.newaxis,:],(1,dims[1],1)) for c in [u_mean,v_mean,w_mean])
         else: u_mean_3d,v_mean_3d,w_mean_3d = (np.tile(c[np.newaxis,:,:],(dims[2],1,1)) for c in [u_mean,v_mean,w_mean])
