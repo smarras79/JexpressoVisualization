@@ -7,10 +7,17 @@
 
 ## How to use it
 
-From single core:
+**From single core:**
+
+- Edit ```batch_paraview_analysis.py```:
+- Set the correct path to ```pvpython``` in 
+
+```'paraview_executable': '/Applications/ParaView-5.11.2.app/Contents/bin/pvpython',```
+
+- Launch it:
 ```python3 batch_paraview_analysis.py```
 
-From a cluster:
+**From a cluster:**
 Edit ```submit_batch_paraview_analysis.sh``` to modify your system-related strings:
 
 Replace the two following lines with what your specific ones:
