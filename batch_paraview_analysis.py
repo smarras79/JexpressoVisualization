@@ -49,16 +49,16 @@ BATCH_CONFIG = {
     #==============================================================================
     # SELECT VARIABLE
     #==============================================================================
-    'data_array': 'VELOMAG',
-    #'data_array': 'w',
+    #'data_array': 'VELOMAG',
+    'data_array': 'w',
     #'data_array': 'θ',
     #'data_array': 'ρ',
     
     #==============================================================================
     # SLICING OR AVERAGING?
     #==============================================================================
-    'analysis_mode': 'averaging',  # 'averaging' or 'slicing'
-    #'analysis_mode': 'slicing',  # 'averaging' or 'slicing'
+    #'analysis_mode': 'averaging',  # 'averaging' or 'slicing'
+    'analysis_mode': 'slicing',  # 'averaging' or 'slicing'
 
     #==============================================================================
     # AVERAGING
