@@ -6,8 +6,15 @@
 
         TO RUN THIS:
         ==============================================================================
-        julia batch_paraview.jl
-        julia batch_paraview.jl --range 100 200 2 --skip-existing
+	1. cp /PATH/TO/Jexpresso/auxiliary/wulver/submit_batch_paraview_analysis.sh .
+	2. edit it to 'cd' to the right output directory
+	3. edit it to make sure that the list of julia calls has the expected range of files
+	e.g.
+	  julia --project batch_paraview_analysis.jl --range 100 199 1 --process-id 1 &
+	  julia --project batch_paraview_analysis.jl --range 200 299 1 --process-id 2 &
+	  julia --project batch_paraview_analysis.jl --range 300 399 1 --process-id 3 &
+
+	4. sbatch submit_batch_paraview_analysis.sh
         ==============================================================================
         """
 
