@@ -3,18 +3,26 @@
 
 TO RUN THIS, simply use:
 
+==============================================================================
 On Wulver:
+==============================================================================
+# BATCH PROCESSING CONFIGURATION
+1. runinteractive:
+srun -p general -n 1 --ntasks-per-node=32 --qos=standard --account=smarras --time=59:00 --pty bash
 
-1. runinteractive
 2. ml foss/2024a ParaView
+
 3. in the script below:
 'paraview_executable': '/Applications/ParaView-5.11.2.app/Contents/bin/pvpython',
+
 4. python3.10 batch_paraview_analysis.py
+==============================================================================
 
 Working ParaView Batch Processor with subprocess isolation
 
 This approach runs each file in a separate ParaView process to completely
 avoid state conflicts between files. Each file gets a fresh ParaView session.
+==============================================================================
 """
 
 import subprocess
