@@ -351,8 +351,8 @@ if __name__ == '__main__':
     
     # --- SLICE & 3D SNAPSHOT CONFIGURATION ---
     WRITE_3D_SNAPSHOT = False
-    X_SLICE_LOC = 1500.0
-    Y_SLICE_LOC = 1500.0
+    X_SLICE_LOC = 2560.0
+    Y_SLICE_LOC = 2560.0
     Z_SLICE_LOC = 100.0
     
     # --- VARIABLE DEFINITION ---
