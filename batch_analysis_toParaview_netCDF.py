@@ -14,13 +14,13 @@ REQUIREMENTS:
 TO RUN THIS:
 ==============================================================================
 # Process files 100-200 (step 2) and create both PNG and NetCDF files
-python3 batch_paraview_analysis.py --range 100 200 2 --output-format both
+python3 batch_analysis_toParaview_netCDF.py --range 100 200 2 --output-format both
 
 # Create only NetCDF files
-python3 batch_paraview_analysis.py --range 100 200 2 --output-format netcdf
+python3 batch_analysis_toParaview_netCDF.py --range 100 200 2 --output-format netcdf --analysis-mode averaging
 
 # Suggest parallel processing ranges
-python3 batch_paraview_analysis.py --suggest-parallel --num-processes 4
+python3 batch_analysis_toParaview_netCDF.py --suggest-parallel --num-processes 4
 """
 
 import subprocess
@@ -33,6 +33,7 @@ import logging
 import argparse
 from pathlib import Path
 from datetime import datetime
+import traceback
 
 # Import libraries required for NetCDF creation
 try:
@@ -60,41 +61,20 @@ FILE_PATTERNS = {
 
 # --- Analysis Configuration ---
 BATCH_CONFIG = {
-    #==============================================================================
-    # SELECT VARIABLE
-    #==============================================================================
     'data_array': 'w',
-    
-    #==============================================================================
-    # SLICING OR AVERAGING?
-    #==============================================================================
     'analysis_mode': 'slicing',  # 'averaging' or 'slicing'
+    'output_format': ['png', 'netcdf'],
+    'netcdf_grid_resolution': 512,
 
-    #==============================================================================
-    # OUTPUT FORMAT
-    #==============================================================================
-    'output_format': ['png', 'netcdf'], # Options: 'png', 'netcdf', or both in a list
-    'netcdf_grid_resolution': 512, # Base resolution for the longest axis of the NetCDF grid
-
-    #==============================================================================
-    # AVERAGING
-    #==============================================================================
     'averaging': {
         'axis': 'Y',
         'resolution': [150, 150, 150],
-        'geometric_limits': {
-            'X': [None, None], 'Y': [4500.0, 5500.0], 'Z': [None, None]
-        }
+        'geometric_limits': {'X': [None, None], 'Y': [4500.0, 5500.0], 'Z': [None, None]}
     },
-
-    #==============================================================================
-    # SLICING
-    #==============================================================================
     'slicing': {
         'axis': 'Z',
-        'coordinate': 100  # Use None for auto-center
+        'coordinate': 100
     },
-    
     'visualization': {
         'image_size': [1200, 800],
         'color_map': 'Blues',
@@ -104,480 +84,288 @@ BATCH_CONFIG = {
 # --- Processing Options ---
 PROCESSING_OPTIONS = {
     'output_directory': './batch_output/',
-    'temp_directory': './batch_temp/', # For intermediate files for NetCDF creation
+    'temp_directory': './batch_temp/',
     'continue_on_error': True,
     'paraview_executable': '/Applications/ParaView-5.11.2.app/Contents/bin/pvpython',
     'paraview_args': ['--force-offscreen-rendering'],
-    'timeout_seconds': 300,  # 5 minutes per file
+    'timeout_seconds': 300,
     'log_file_prefix': 'batch_processing',
 }
 
 #==============================================================================
-# COMMAND LINE ARGUMENT PARSING
+# (Argument Parsing and other helper functions remain unchanged)
 #==============================================================================
-
 def parse_arguments():
-    """Parse command line arguments for parallel processing."""
-    parser = argparse.ArgumentParser(
-        description='ParaView Batch Processor with Parallel Support for PNG and NetCDF',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    
-    parser.add_argument('--range', nargs=3, type=int, metavar=('START', 'END', 'STEP'),
-                        help='Specify a range of file numbers to process.')
-    parser.add_argument('--files', nargs='+', type=str,
-                        help='A specific list of files to process.')
-    parser.add_argument('--process-id', type=str, default=None,
-                        help='An identifier for this process, used for logging.')
-    parser.add_argument('--log-level', type=str, default='INFO',
-                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-                        help='Set the logging level.')
-    parser.add_argument('--skip-existing', action='store_true',
-                        help='Skip processing if the output file already exists.')
-    parser.add_argument('--output-dir', type=str, default=None,
-                        help='Override the output directory specified in the config.')
-    parser.add_argument('--suggest-parallel', action='store_true',
-                        help='Suggest parallel command ranges instead of running.')
-    parser.add_argument('--num-processes', type=int, default=4,
-                        help='Number of processes to suggest for parallel execution.')
-    
-    parser.add_argument('--output-format', type=str, choices=['png', 'netcdf', 'both'],
-                       default=None, help='Specify output format (overrides config)')
-
+    parser = argparse.ArgumentParser(description='ParaView Batch Processor', formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--range', nargs=3, type=int, metavar=('START', 'END', 'STEP'), help='Range of file numbers to process.')
+    parser.add_argument('--files', nargs='+', type=str, help='A specific list of files to process.')
+    parser.add_argument('--process-id', type=str, default=None, help='Identifier for logging.')
+    parser.add_argument('--log-level', type=str, default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], help='Logging level.')
+    parser.add_argument('--skip-existing', action='store_true', help='Skip if output file already exists.')
+    parser.add_argument('--output-dir', type=str, default=None, help='Override the output directory.')
+    parser.add_argument('--suggest-parallel', action='store_true', help='Suggest parallel command ranges.')
+    parser.add_argument('--num-processes', type=int, default=4, help='Number of processes for parallel suggestion.')
+    parser.add_argument('--output-format', type=str, choices=['png', 'netcdf', 'both'], default=None, help='Override output format.')
+    parser.add_argument('--analysis-mode', type=str, choices=['slicing', 'averaging'], default=None, help='Override analysis mode.')
     return parser.parse_args()
 
-#==============================================================================
-# IMPLEMENTATION
-#==============================================================================
-
 def setup_logging(process_id=None, log_level='INFO'):
-    """Sets up a logger that prints to console and saves to a file."""
     log_dir = Path(PROCESSING_OPTIONS['output_directory']) / 'logs'
     log_dir.mkdir(parents=True, exist_ok=True)
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    pid_str = f"_pid_{process_id}" if process_id else ""
-    log_filename = log_dir / f"{PROCESSING_OPTIONS['log_file_prefix']}{pid_str}_{timestamp}.log"
-
+    log_filename = log_dir / f"{PROCESSING_OPTIONS['log_file_prefix']}_{process_id or 'main'}_{timestamp}.log"
     logger = logging.getLogger()
     logger.setLevel(log_level)
-
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
+    if logger.hasHandlers(): logger.handlers.clear()
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler = logging.FileHandler(log_filename)
-    console_handler = logging.StreamHandler(sys.stdout)
-
-    log_format = '%(asctime)s - %(levelname)s - %(message)s'
-    formatter = logging.Formatter(log_format)
     file_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
-
     logger.addHandler(file_handler)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
-    
     return logger
 
 def extract_number_from_filename(filepath):
-    """Extracts the numerical part of the filename for sorting."""
-    filename = os.path.basename(filepath)
-    match = re.search(r'(\d+\.?\d*)', filename)
-    if match:
-        try:
-            return int(match.group(1))
-        except ValueError:
-            return float(match.group(1))
-    return filename
+    match = re.search(r'(\d+\.?\d*)', os.path.basename(filepath))
+    try: return int(match.group(1)) if match else 0
+    except ValueError: return float(match.group(1))
 
 def find_files(args):
-    """Finds and sorts files based on configuration and command-line arguments."""
     logger = logging.getLogger(__name__)
-    
-    if args.files:
-        logger.info(f"Processing a specific list of {len(args.files)} files.")
-        return [str(Path(f).absolute()) for f in args.files]
-
     base_dir = Path(FILE_PATTERNS['base_directory'])
-    all_files = sorted(glob.glob(str(base_dir / FILE_PATTERNS['file_template'].format('*'))))
-    
+    all_files = sorted(glob.glob(str(base_dir / FILE_PATTERNS['file_template'].format('*'))), key=extract_number_from_filename)
     if not all_files:
-        logger.error(f"No files found with pattern '{FILE_PATTERNS['file_template']}' in '{base_dir.absolute()}'")
-        return []
-
-    start_num, end_num, step = (args.range[0], args.range[1], args.range[2]) if args.range else (None, None, 1)
-
-    if start_num is None:
-        logger.info("No range specified. Processing all found files.")
-        return all_files
-
-    filtered_files = []
-    for f in all_files:
-        num = extract_number_from_filename(f)
-        if isinstance(num, (int, float)) and start_num <= num <= end_num and (num - start_num) % step == 0:
-            filtered_files.append(f)
-    
-    logger.info(f"Found {len(filtered_files)} files to process in range {start_num}-{end_num} (step {step}).")
-    return filtered_files
+        logger.error(f"No files found with pattern '{FILE_PATTERNS['file_template']}' in '{base_dir.absolute()}'"); return []
+    if args.range:
+        start, end, step = args.range
+        files = [f for f in all_files if start <= extract_number_from_filename(f) <= end and (extract_number_from_filename(f) - start) % step == 0]
+        logger.info(f"Found {len(files)} files in range {start}-{end} (step {step}).")
+        return files
+    logger.info(f"Processing all {len(all_files)} found files.")
+    return all_files
 
 def generate_output_basename(input_file, output_dir):
-    """Generate a base output filename without extension."""
-    file_number = extract_number_from_filename(input_file)
-    
-    if isinstance(file_number, int):
-        number_str = f"{file_number:06d}"
-    else:
-        number_str = f"{file_number:08.3f}".replace('.', '_')
-    
-    mode = 'avg' if BATCH_CONFIG['analysis_mode'] == 'averaging' else 'slice'
-    axis = (BATCH_CONFIG['averaging']['axis'] if BATCH_CONFIG['analysis_mode'] == 'averaging' 
-           else BATCH_CONFIG['slicing']['axis'])
-    
-    filename = f"{BATCH_CONFIG['data_array']}_{mode}_{axis}_{number_str}"
-    return str(output_dir / filename)
+    num = extract_number_from_filename(input_file)
+    num_str = f"{num:06d}" if isinstance(num, int) else f"{num:08.3f}".replace('.', '_')
+    mode = BATCH_CONFIG['analysis_mode'][:3]
+    axis = BATCH_CONFIG[BATCH_CONFIG['analysis_mode']]['axis']
+    return str(output_dir / f"{BATCH_CONFIG['data_array']}_{mode}_{axis}_{num_str}")
+
+#==============================================================================
 
 def generate_processing_script(input_file, png_output_file, temp_dir):
     """Generate a standalone script to process a single file."""
-    
     input_abs = os.path.abspath(input_file)
     png_output_abs = os.path.abspath(png_output_file) if png_output_file else "None"
-    
-    temp_npz_file = os.path.join(
-        os.path.abspath(temp_dir),
-        f"temp_data_{Path(input_file).stem}.npz"
-    )
+    temp_npz_file = os.path.join(os.path.abspath(temp_dir), f"temp_data_{Path(input_file).stem}.npz")
 
     save_png = "'png' in BATCH_CONFIG['output_format']"
     save_npz = "'netcdf' in BATCH_CONFIG['output_format']"
 
-    ### MODIFICATION HERE ###
     script_content = f"""#!/usr/bin/env python3
-import sys
-import os
+import sys, os, traceback
 from paraview.simple import *
 import numpy as np
 from vtkmodules.numpy_interface import dataset_adapter as dsa
-from paraview.simple import servermanager
+import vtk
 
 BATCH_CONFIG = {BATCH_CONFIG}
 
 def main():
     try:
-        input_file = r'{input_abs}'
-        data_array = BATCH_CONFIG['data_array']
-
-        print(f"Processing file: {{input_file}}")
-
-        # --- DATA LOADING (Robust Method) ---
-        source = OpenDataFile(input_file)
+        source = OpenDataFile(r'{input_abs}')
         if not source:
-            print(f"ERROR: Failed to open file {{input_file}} with OpenDataFile.")
-            return False
+            print(f"ERROR: Failed to open file r'{input_abs}'"); return False
         
         # --- ANALYSIS ---
         if BATCH_CONFIG['analysis_mode'] == 'averaging':
-            print("Mode: Averaging")
+            print("Mode: Averaging (resampling only)")
             resample = ResampleToImage(Input=source)
             resample.SamplingDimensions = BATCH_CONFIG['averaging']['resolution']
-            
             bounds = source.GetDataInformation().GetBounds()
-            geo_limits = BATCH_CONFIG['averaging']['geometric_limits']
-            
-            x_min = geo_limits['X'][0] if geo_limits['X'][0] is not None else bounds[0]
-            x_max = geo_limits['X'][1] if geo_limits['X'][1] is not None else bounds[1]
-            y_min = geo_limits['Y'][0] if geo_limits['Y'][0] is not None else bounds[2]
-            y_max = geo_limits['Y'][1] if geo_limits['Y'][1] is not None else bounds[3]
-            z_min = geo_limits['Z'][0] if geo_limits['Z'][0] is not None else bounds[4]
-            z_max = geo_limits['Z'][1] if geo_limits['Z'][1] is not None else bounds[5]
-            
-            resample.SetSamplingBounds(x_min, x_max, y_min, y_max, z_min, z_max)
-            
-            average = PythonCalculator(Input=resample)
-            average.Expression = f"average(inputs[0].PointData['{{data_array}}'], '{BATCH_CONFIG['averaging']['axis']}')"
-            source = average
-
+            geo = BATCH_CONFIG['averaging']['geometric_limits']
+            resample.SamplingBounds = [
+                geo['X'][0] or bounds[0], geo['X'][1] or bounds[1],
+                geo['Y'][0] or bounds[2], geo['Y'][1] or bounds[3],
+                geo['Z'][0] or bounds[4], geo['Z'][1] or bounds[5]
+            ]
+            source = resample
+        
         elif BATCH_CONFIG['analysis_mode'] == 'slicing':
             print("Mode: Slicing")
-            slice_op = Slice(Input=source)
-            slice_op.SliceType = 'Plane'
-            
-            axis = BATCH_CONFIG['slicing']['axis'].upper()
-            if axis == 'X': slice_op.SliceType.Normal = [1.0, 0.0, 0.0]
-            elif axis == 'Y': slice_op.SliceType.Normal = [0.0, 1.0, 0.0]
-            else: slice_op.SliceType.Normal = [0.0, 0.0, 1.0]
-
-            coordinate = BATCH_CONFIG['slicing']['coordinate']
-            if coordinate is None:
-                bounds = source.GetDataInformation().GetBounds()
-                center = [(bounds[i] + bounds[i+1]) / 2.0 for i in [0, 2, 4]]
-                slice_op.SliceType.Origin = center
+            s = BATCH_CONFIG['slicing']
+            slice_op = Slice(Input=source, SliceType='Plane')
+            axis, coord = s['axis'].upper(), s['coordinate']
+            normals = {{'X': [1,0,0], 'Y': [0,1,0], 'Z': [0,0,1]}}
+            slice_op.SliceType.Normal = normals[axis]
+            if coord is None:
+                slice_op.SliceType.Origin = source.GetDataInformation().GetCenter()
             else:
-                slice_op.SliceType.Origin = [0,0,0]
-                if axis == 'X': slice_op.SliceType.Origin[0] = coordinate
-                elif axis == 'Y': slice_op.SliceType.Origin[1] = coordinate
-                else: slice_op.SliceType.Origin[2] = coordinate
+                origin = [0,0,0]; origin[('X','Y','Z').index(axis)] = coord
+                slice_op.SliceType.Origin = origin
             source = slice_op
-        
-        final_arrays = [source.GetPointDataInformation().GetArray(i).Name 
-                       for i in range(source.GetPointDataInformation().GetNumberOfArrays())]
-        
-        if data_array in final_arrays: array_name_to_use = data_array
-        elif final_arrays:
-            array_name_to_use = final_arrays[0]
-            print(f"Using first available array: {{array_name_to_use}}")
-        else:
-            print("ERROR: No arrays found for processing")
-            return False
 
+        # --- Get array name ---
+        all_arrays = source.GetPointDataInformation()
+        array_name_to_use = BATCH_CONFIG['data_array']
+        if not all_arrays.GetArray(array_name_to_use):
+             found_array = all_arrays.GetArray(0).Name if all_arrays.GetNumberOfArrays() > 0 else None
+             if not found_array: print("ERROR: No data arrays found."); return False
+             print(f"WARN: '{{array_name_to_use}}' not found. Using '{{found_array}}'.")
+             array_name_to_use = found_array
+        
         # --- OUTPUT GENERATION ---
         if {save_png}:
-            print("Creating visualization for PNG...")
+            render_source = Slice(Input=source, SliceType='Plane', SliceOffsetValues=[0.0]) if BATCH_CONFIG['analysis_mode'] == 'averaging' else source
             view = GetActiveViewOrCreate('RenderView')
-            display = Show(source, view)
+            display = Show(render_source, view)
             ColorBy(display, ('POINTS', array_name_to_use))
-            
-            color_map = GetColorTransferFunction(array_name_to_use)
-            color_map.ApplyPreset(BATCH_CONFIG['visualization']['color_map'], True)
-            
-            scalar_bar = GetScalarBar(color_map, view)
-            scalar_bar.Visibility = 1
-            
-            view.ResetCamera()
-            Render()
-            
+            GetColorTransferFunction(array_name_to_use).ApplyPreset(BATCH_CONFIG['visualization']['color_map'], True)
+            GetScalarBar(GetColorTransferFunction(array_name_to_use), view).Visibility = 1
+            view.ResetCamera(); Render()
             SaveScreenshot(r"{png_output_abs}", view, ImageResolution=BATCH_CONFIG['visualization']['image_size'])
-            
-            if os.path.exists(r"{png_output_abs}") and os.path.getsize(r"{png_output_abs}") > 1000:
-                print(f"PNG file created successfully.")
-            else:
-                print(f"ERROR: PNG file was not created or is empty.")
-                return False
+            print("PNG file created successfully.")
 
         if {save_npz}:
-            print("Extracting data for NetCDF file...")
-            try:
-                vtk_data = servermanager.Fetch(source)
-                wrapped_data = dsa.WrapDataObject(vtk_data)
-                
-                points = wrapped_data.Points
-                values = wrapped_data.PointData[array_name_to_use]
-                
-                print(f"  Extracted {{len(points)}} points.")
-                np.savez_compressed(
-                    r"{temp_npz_file}",
-                    points=points,
-                    values=values,
-                    array_name=array_name_to_use
-                )
-                print(f"INTERMEDIATE_FILE:{{r'{temp_npz_file}'}}")
-                
-            except Exception as e:
-                print(f"ERROR extracting data for NetCDF: {{e}}")
-                return False
-
-        print("Processing completed successfully")
-        return True
+            print("Extracting data for intermediate file...")
+            vtk_data = servermanager.Fetch(source)
+            wrapped_data = dsa.WrapDataObject(vtk_data)
+            values = wrapped_data.PointData[array_name_to_use]
+            
+            # --- MODIFIED PART ---
+            save_args = {{'values': values, 'array_name': array_name_to_use}}
+            if isinstance(vtk_data, vtk.vtkImageData):
+                print("  Saving structured data (ImageData)")
+                save_args.update({{'dims': vtk_data.GetDimensions(), 'origin': vtk_data.GetOrigin(), 
+                                   'spacing': vtk_data.GetSpacing(), 'is_image_data': True}})
+            else:
+                print("  Saving unstructured data")
+                save_args.update({{'points': wrapped_data.Points, 'is_image_data': False}})
+            
+            np.savez_compressed(r"{temp_npz_file}", **save_args)
+            print(f"INTERMEDIATE_FILE:{{r'{temp_npz_file}'}}")
         
+        return True
     except Exception as e:
-        import traceback
-        print("An unexpected error occurred during ParaView processing:")
-        print(traceback.format_exc())
-        return False
+        print(f"ERROR in ParaView script: {{e}}\\n{{traceback.format_exc()}}"); return False
 
 if __name__ == "__main__":
-    success = main()
-    sys.exit(0 if success else 1)
+    sys.exit(0 if main() else 1)
 """
     return script_content
 
-def suggest_parallel_ranges(files, num_processes=4):
-    """Suggests command line ranges for parallel processing."""
-    if not files:
-        print("No files found to process.")
-        return
-
-    total_files = len(files)
-    chunk_size = (total_files + num_processes - 1) // num_processes
-
-    print("\n" + "="*60)
-    print(f"Suggested parallel command ranges for {num_processes} processes:")
-    print("="*60)
-
-    for i in range(num_processes):
-        start_index = i * chunk_size
-        end_index = min((i + 1) * chunk_size - 1, total_files - 1)
-
-        if start_index >= total_files:
-            continue
-
-        start_num = extract_number_from_filename(files[start_index])
-        end_num = extract_number_from_filename(files[end_index])
-        
-        step = 1
-        if len(files) > 1:
-            step = extract_number_from_filename(files[1]) - extract_number_from_filename(files[0])
-            if step <= 0: step = 1
-
-        print(f"\n# Process {i+1}:")
-        print(f"python3 {Path(__file__).name} --range {start_num} {end_num} {step} --process-id {i+1} &")
-    
-    print("\n" + "="*60)
-
-def create_netcdf_from_npz(npz_path, nc_path, analysis_mode, axis, data_array, resolution):
-    """
-    Reads an NPZ file, interpolates data onto a regular grid, and saves as NetCDF.
-    """
+def create_netcdf_from_npz(npz_path, nc_path):
+    """Reads NPZ, processes data, and saves as NetCDF."""
     try:
         data = np.load(npz_path)
-        points_3d = data['points']
-        values = data['values']
+        # --- CORRECTED PART ---
         array_name = str(data['array_name'])
         
-        if analysis_mode == 'slicing':
-            if axis.upper() == 'X': points_2d, dims, coord_names = points_3d[:, [1, 2]], ['y', 'z'], ('y', 'z')
-            elif axis.upper() == 'Y': points_2d, dims, coord_names = points_3d[:, [0, 2]], ['x', 'z'], ('x', 'z')
-            else: points_2d, dims, coord_names = points_3d[:, [0, 1]], ['x', 'y'], ('y', 'x')
-        elif analysis_mode == 'averaging':
-             if axis.upper() == 'X': points_2d, dims, coord_names = points_3d[:, [1, 2]], ['y', 'z'], ('z', 'y')
-             elif axis.upper() == 'Y': points_2d, dims, coord_names = points_3d[:, [0, 2]], ['x', 'z'], ('z', 'x')
-             else: points_2d, dims, coord_names = points_3d[:, [0, 1]], ['x', 'y'], ('y', 'x')
+        if BATCH_CONFIG['analysis_mode'] == 'averaging' and data['is_image_data']:
+            dims, origin, spacing = data['dims'], data['origin'], data['spacing']
+            values_3d = data['values'].reshape(dims[2], dims[1], dims[0]) # VTK order is Z, Y, X
+            
+            axis_map = {'X': 2, 'Y': 1, 'Z': 0}
+            avg_axis_idx = axis_map[BATCH_CONFIG['averaging']['axis'].upper()]
+            averaged_array = np.mean(values_3d, axis=avg_axis_idx)
+            
+            if avg_axis_idx == 2: # Avg over X -> ZY plane
+                coords1, coords2 = origin[2] + np.arange(dims[2]) * spacing[2], origin[1] + np.arange(dims[1]) * spacing[1]
+                ds = xr.Dataset({array_name: (('z', 'y'), averaged_array)}, coords={'z': coords1, 'y': coords2})
+            elif avg_axis_idx == 1: # Avg over Y -> ZX plane
+                coords1, coords2 = origin[2] + np.arange(dims[2]) * spacing[2], origin[0] + np.arange(dims[0]) * spacing[0]
+                ds = xr.Dataset({array_name: (('z', 'x'), averaged_array)}, coords={'z': coords1, 'x': coords2})
+            else: # Avg over Z -> YX plane
+                coords1, coords2 = origin[1] + np.arange(dims[1]) * spacing[1], origin[0] + np.arange(dims[0]) * spacing[0]
+                ds = xr.Dataset({array_name: (('y', 'x'), averaged_array)}, coords={'y': coords1, 'x': coords2})
 
-        min1, max1 = points_2d[:, 0].min(), points_2d[:, 0].max()
-        min2, max2 = points_2d[:, 1].min(), points_2d[:, 1].max()
-        range1, range2 = max1 - min1, max2 - min2
-        
-        if range1 >= range2:
-            n1, n2 = resolution, int(resolution * (range2 / range1)) if range1 > 0 else 1
-        else:
-            n2, n1 = resolution, int(resolution * (range1 / range2)) if range2 > 0 else 1
-        
-        coords1, coords2 = np.linspace(min1, max1, n1), np.linspace(min2, max2, n2)
-        grid1, grid2 = np.meshgrid(coords1, coords2)
+        else: # Slicing mode
+            points_3d, values = data['points'], data['values']
+            axis_map = {'X': (1,2), 'Y': (0,2), 'Z': (0,1)}
+            dims_map = {'X': ('y','z'), 'Y': ('x','z'), 'Z': ('x','y')}
+            slice_axis = BATCH_CONFIG['slicing']['axis'].upper()
+            
+            points_2d = points_3d[:, list(axis_map[slice_axis])]
+            dim_names = dims_map[slice_axis]
 
-        interpolated_array = griddata(points_2d, values, (grid1, grid2), method='linear', fill_value=np.nan)
+            min1, max1 = points_2d[:, 0].min(), points_2d[:, 0].max()
+            min2, max2 = points_2d[:, 1].min(), points_2d[:, 1].max()
+            res = BATCH_CONFIG['netcdf_grid_resolution']
+            n1 = res if (max1 - min1) >= (max2 - min2) else int(res * (max1 - min1) / (max2 - min2))
+            n2 = res if (max2 - min2) > (max1 - min1) else int(res * (max2 - min2) / (max1 - min1))
 
-        ds = xr.Dataset(
-            {array_name: (coord_names, interpolated_array)},
-            coords={dims[0]: (dims[0], coords1), dims[1]: (dims[1], coords2)}
-        )
-        ds[dims[0]].attrs.update(units='m', long_name=f'{dims[0].upper()} Coordinate')
-        ds[dims[1]].attrs.update(units='m', long_name=f'{dims[1].upper()} Coordinate')
-        ds.attrs.update(
-            title=f'{analysis_mode.capitalize()} of {data_array} on {axis.upper()}-plane',
-            creation_date=str(datetime.now())
-        )
+            grid_x, grid_y = np.meshgrid(np.linspace(min1, max1, n1), np.linspace(min2, max2, n2))
+            interpolated_values = griddata(points_2d, values, (grid_x, grid_y), method='linear')
+            
+            ds = xr.Dataset({array_name: (dim_names, interpolated_values)},
+                            coords={dim_names[0]: grid_x[0,:], dim_names[1]: grid_y[:,0]})
+
         ds.to_netcdf(nc_path)
         return True
 
     except Exception as e:
-        logging.getLogger(__name__).error(f"  Failed to create NetCDF file: {e}")
+        logging.getLogger(__name__).error(f"  Failed to create NetCDF: {e}\n{traceback.format_exc()}")
         return False
     finally:
-        if os.path.exists(npz_path):
-            os.remove(npz_path)
+        if os.path.exists(npz_path): os.remove(npz_path)
 
 def process_files():
-    """Process all files using subprocess isolation."""
-    
     args = parse_arguments()
     logger = setup_logging(args.process_id, args.log_level)
-
-    if args.output_dir:
-        PROCESSING_OPTIONS['output_directory'] = args.output_dir
-
-    if args.output_format:
-        BATCH_CONFIG['output_format'] = ['png', 'netcdf'] if args.output_format == 'both' else [args.output_format]
     
-    logger.info("Starting batch processing...")
-    logger.info(f"Process ID: {args.process_id or 'main'}")
-    logger.info(f"Output directory: {Path(PROCESSING_OPTIONS['output_directory']).absolute()}")
+    if args.output_dir: PROCESSING_OPTIONS['output_directory'] = args.output_dir
+    if args.output_format: BATCH_CONFIG['output_format'] = ['png', 'netcdf'] if args.output_format == 'both' else [args.output_format]
+    if args.analysis_mode: BATCH_CONFIG['analysis_mode'] = args.analysis_mode
+
+    logger.info(f"Starting batch processing... Mode: {BATCH_CONFIG['analysis_mode'].upper()}")
     
     files = find_files(args)
-    if not files:
-        logger.warning("No files to process. Exiting.")
-        return
+    if not files: logger.warning("No files to process. Exiting."); return
     
-    output_dir = Path(PROCESSING_OPTIONS['output_directory'])
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(PROCESSING_OPTIONS['output_directory']); output_dir.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(PROCESSING_OPTIONS['temp_directory']); temp_dir.mkdir(parents=True, exist_ok=True)
     
-    temp_dir = Path(PROCESSING_OPTIONS['temp_directory'])
-    if 'netcdf' in BATCH_CONFIG['output_format']:
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Temporary directory for NetCDF data: {temp_dir.absolute()}")
-    
-    start_time = datetime.now()
+    start_time = datetime.now() # Corrected initialization
     processed_count, failed_count = 0, 0
-
     for i, input_file in enumerate(files, 1):
         logger.info(f"Processing file {i}/{len(files)}: {Path(input_file).name}")
-        
         try:
             output_basename = generate_output_basename(input_file, output_dir)
             png_file, nc_file = f"{output_basename}.png", f"{output_basename}.nc"
-
-            if args.skip_existing:
-                png_exists = not ('png' in BATCH_CONFIG['output_format']) or (os.path.exists(png_file) and os.path.getsize(png_file) > 1000)
-                nc_exists = not ('netcdf' in BATCH_CONFIG['output_format']) or (os.path.exists(nc_file) and os.path.getsize(nc_file) > 100)
-                if png_exists and nc_exists:
-                    logger.info(f"  ⏭  Skipping (all requested outputs exist)")
-                    processed_count += 1
-                    continue
             
-            script_content = generate_processing_script(input_file, png_file, temp_dir)
+            with tempfile.NamedTemporaryFile(mode='w+', suffix='.py', delete=False) as f:
+                f.write(generate_processing_script(input_file, png_file, temp_dir)); temp_script_path = f.name
             
-            with tempfile.NamedTemporaryFile(mode='w+', suffix='.py', delete=False) as temp_script:
-                temp_script.write(script_content)
-                temp_script_path = temp_script.name
-
             try:
-                command = [PROCESSING_OPTIONS['paraview_executable'], *PROCESSING_OPTIONS['paraview_args'], temp_script_path]
-                logger.debug(f"  Executing: {' '.join(command)}")
+                cmd = [PROCESSING_OPTIONS['paraview_executable'], *PROCESSING_OPTIONS['paraview_args'], temp_script_path]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=PROCESSING_OPTIONS['timeout_seconds'])
                 
-                result = subprocess.run(command, capture_output=True, text=True, timeout=PROCESSING_OPTIONS['timeout_seconds'])
-
-                if result.returncode == 0:
-                    logger.info(f"  ✓ Subprocess finished successfully.")
-                    processed_count += 1
-                    
+                if result.returncode == 0 and "ERROR" not in result.stdout:
+                    logger.info("  ✓ ParaView script finished successfully.")
                     intermediate_file = next((line.split(":", 1)[1] for line in result.stdout.splitlines() if line.startswith("INTERMEDIATE_FILE:")), None)
-                    
-                    if intermediate_file and os.path.exists(intermediate_file):
-                        logger.info(f"  Creating NetCDF file: {Path(nc_file).name}")
-                        success = create_netcdf_from_npz(
-                            intermediate_file, nc_file, BATCH_CONFIG['analysis_mode'],
-                            (BATCH_CONFIG['averaging']['axis'] if BATCH_CONFIG['analysis_mode'] == 'averaging' else BATCH_CONFIG['slicing']['axis']),
-                            BATCH_CONFIG['data_array'], BATCH_CONFIG['netcdf_grid_resolution']
-                        )
-                        if success: logger.info(f"    ✓ NetCDF created: {Path(nc_file).name}")
+                    if 'netcdf' in BATCH_CONFIG['output_format']:
+                        if intermediate_file and os.path.exists(intermediate_file):
+                            if create_netcdf_from_npz(intermediate_file, nc_file):
+                                logger.info(f"    ✓ NetCDF created: {Path(nc_file).name}")
+                            else:
+                                logger.error(f"    ✗ Failed to create NetCDF for {Path(input_file).name}"); failed_count+=1
                         else:
-                            logger.error(f"    ✗ Failed to create NetCDF for {Path(input_file).name}")
-                            failed_count, processed_count = failed_count + 1, processed_count - 1
+                            logger.error("    ✗ Intermediate file for NetCDF not found."); failed_count+=1
+                    processed_count += 1
                 else:
-                    logger.error(f"  ✗ ParaView script failed for {Path(input_file).name}")
-                    logger.error(f"    Return Code: {result.returncode}")
-                    logger.error("    --- STDOUT ---\n    " + "\n    ".join(result.stdout.splitlines()))
-                    logger.error("    --- STDERR ---\n    " + "\n    ".join(result.stderr.splitlines()))
-                    failed_count += 1
-
+                    logger.error(f"  ✗ ParaView script failed for {Path(input_file).name}\n"
+                                 f"    --- STDOUT ---\n    " + "\n    ".join(result.stdout.splitlines()) + "\n"
+                                 f"    --- STDERR ---\n    " + "\n    ".join(result.stderr.splitlines())); failed_count += 1
             finally:
-                if os.path.exists(temp_script_path):
-                    os.unlink(temp_script_path)
-                    
-        except subprocess.TimeoutExpired:
-            logger.error(f"  ✗ Timeout processing {input_file}"); failed_count += 1
+                if os.path.exists(temp_script_path): os.unlink(temp_script_path)
         except Exception as e:
-            logger.error(f"  ✗ Error: {e}"); failed_count += 1
+            logger.error(f"  ✗ Main script error: {e}\n{traceback.format_exc()}"); failed_count += 1
             if not PROCESSING_OPTIONS['continue_on_error']: break
-    
+
     total_time = datetime.now() - start_time
-    logger.info("\n" + "=" * 50 + f"\nBATCH PROCESSING COMPLETE\nProcess ID: {args.process_id or 'main'}\nTotal time: {total_time}"
-                f"\nSuccessfully processed: {processed_count} files\nFailed: {failed_count} files")
-    
-    if processed_count > 0:
-        logger.info(f"\nOutput files are in: {output_dir.absolute()}")
+    logger.info(f"\nBATCH PROCESSING COMPLETE\nTotal time: {total_time}\nSuccess: {processed_count}, Failed: {failed_count}")
+
 
 if __name__ == "__main__":
-    args = parse_arguments()
-    if args.suggest_parallel:
-        suggest_parallel_ranges(find_files(args), args.num_processes)
-    else:
-        process_files()
+    process_files()
