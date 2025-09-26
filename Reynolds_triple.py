@@ -16,7 +16,8 @@ def calculate_and_save_netcdf(
     vel_variables: list = ['u', 'v', 'w'],
     scalar_variables: list = [],
     coord_precision: int = 6,
-    base_resolution: int = 256,
+    base_resolutionx: int = 512,
+    base_resolutionz: int = 256,
     start_step: int = None,
     end_step: int = None
 ):
@@ -165,12 +166,14 @@ def calculate_and_save_netcdf(
 
     x_min, x_max, z_min, z_max = unique_xz[:, 0].min(), unique_xz[:, 0].max(), unique_xz[:, 1].min(), unique_xz[:, 1].max()
     x_range, z_range = x_max - x_min, z_max - z_min
-    if x_range >= z_range:
-        nx = base_resolution
-        nz = int(base_resolution * (z_range / x_range)) if z_range > 0 else 1
-    else:
-        nz = base_resolution
-        nx = int(base_resolution * (x_range / z_range)) if x_range > 0 else 1
+    #if x_range >= z_range:
+    #    nx = base_resolution
+    #    nz = int(base_resolution * (z_range / x_range)) if z_range > 0 else 1
+    #else:
+    #    nz = base_resolution
+    #    nx = int(base_resolution * (x_range / z_range)) if x_range > 0 else 1
+    nz = base_resolutionz
+    nx = base_resolutionx
     
     print(f"Data aspect ratio preserved. New grid resolution: ({nx}, {nz})")
     x_coords = np.linspace(x_min, x_max, nx)
@@ -206,7 +209,8 @@ if __name__ == '__main__':
     DATA_DIR = "/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/output-10240x10240x3000"
     FILE_PATTERN = "iter_*.pvtu"
     OUTPUT_NC_FILE = "turbulence_statistics.nc"
-    BASE_GRID_RESOLUTION = 512
+    BASE_GRID_RESOLUTIONX = 512 #512
+    BASE_GRID_RESOLUTIONZ = 300 #512
     START_STEP = 150
     END_STEP = 1000
     
@@ -226,7 +230,8 @@ if __name__ == '__main__':
             output_filename=OUTPUT_NC_FILE,
             vel_variables=VELOCITY_VARS,
             scalar_variables=SCALAR_VARS,
-            base_resolution=BASE_GRID_RESOLUTION,
+            base_resolutionx=BASE_GRID_RESOLUTIONX,
+            base_resolutionz=BASE_GRID_RESOLUTIONZ,
             start_step=START_STEP,
             end_step=END_STEP
         )
