@@ -51,9 +51,5 @@ wait
 
 echo "All processes completed! Check batch_output/ for results."
 
-#'base_directory': '/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/output-10240x10240x3000/',
-
-#'paraview_executable': '/Applications/ParaView-5.11.2.app/Contents/bin/pvpython',
-
 deactivate
 module purge
