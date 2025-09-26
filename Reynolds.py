@@ -162,12 +162,13 @@ def calculate_and_save_netcdf(
 
 if __name__ == '__main__':
     # --- CONFIGURATION ---
-    DATA_DIR = "/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/output-10240x10240x3000"
+    #DATA_DIR = "/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/output-10240x10240x3000"
+    DATA_DIR = "/scratch/smarras/smarras/output/64x64x36_5kmX5kmX3km/CompEuler/LESsmago/output"
     FILE_PATTERN = "iter_*.pvtu"
     OUTPUT_NC_FILE = "reynolds_stresses.nc"
     BASE_GRID_RESOLUTION = 512
-    START_STEP = 400
-    END_STEP = 600
+    START_STEP = 150
+    END_STEP = 1000
 
     # --- EXECUTION ---
     if not os.path.isdir(DATA_DIR):

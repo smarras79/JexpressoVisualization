@@ -27,6 +27,7 @@ import subprocess
 import os
 import sys
 import glob
+import json
 import re
 import tempfile
 import logging
@@ -54,7 +55,8 @@ except ImportError as e:
 # --- File Pattern Configuration ---
 FILE_PATTERNS = {
     'pattern_type': 'iteration',
-    'base_directory': '/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/output-10240x10240x3000/',
+    #'base_directory': '/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/output-10240x10240x3000/',
+    'base_directory': '/scratch/smarras/smarras/output/64x64x36_5kmX5kmX3km/CompEuler/LESsmago/output',
     'file_template': 'iter_{}.pvtu',
     'number_range': None,  # Will be set by command line args or auto-detect
 }
@@ -82,15 +84,19 @@ BATCH_CONFIG = {
 }
 
 # --- Processing Options ---
-PROCESSING_OPTIONS = {
-    'output_directory': './batch_output/',
-    'temp_directory': './batch_temp/',
-    'continue_on_error': True,
-    'paraview_executable': '/Applications/ParaView-5.11.2.app/Contents/bin/pvpython',
-    'paraview_args': ['--force-offscreen-rendering'],
-    'timeout_seconds': 300,
-    'log_file_prefix': 'batch_processing',
-}
+
+# --- Load Processing Options from JSON file ---
+try:
+    with open('config.json', 'r') as f:
+        PROCESSING_OPTIONS = json.load(f)
+except FileNotFoundError:
+    print("FATAL ERROR: The `config.json` file was not found.")
+    print("Please make sure the configuration file is in the same directory as the script.")
+    sys.exit(1)
+except json.JSONDecodeError:
+    print("FATAL ERROR: The `config.json` file is not formatted correctly.")
+    sys.exit(1)
+
 
 #==============================================================================
 # (Argument Parsing and other helper functions remain unchanged)

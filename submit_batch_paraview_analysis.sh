@@ -10,12 +10,16 @@
 #SBATCH --time=23:59:00
 #SBATCH --mem-per-cpu=4000M
 
-module load bright shared mpich/ge/gcc/64 foss/2024a ParaView
-#cd /scratch/smarras/smarras/output/64x64x24/CompEuler/LESsmago/output/
-cd /scratch/smarras/smarras/output/64x64x36_5kmX5kmX3km/CompEuler/LESsmago/output/
+module purge
+module spider ParaView shared mpich/ge/gcc/64
+#module load bright shared mpich/ge/gcc/64 ParaView
+#module load bright shared mpich/ge/gcc/64 foss/2024a ParaView
 
 echo "Starting simple parallel ParaView processing..."
 echo "Job ID: $SLURM_JOB_ID, CPUs: $SLURM_NTASKS_PER_NODE"
+
+source /mmfs1/project/smarras/smarras/JexpressoVisualization/venv_pyvista/bin/activate
+pip3 install numpy pyvista tqdm xarray scipy
 
 #=============================================
 # CUSTOMIZE THESE RANGES BASED ON YOUR FILES:
@@ -23,8 +27,9 @@ echo "Job ID: $SLURM_JOB_ID, CPUs: $SLURM_NTASKS_PER_NODE"
 # python3 batch_paraview_analysis.py --dry-run
 #=============================================
 # Then split the work across processes:
-python3 batch_paraview_analysis.py --range 100 199 1 --process-id 1 &
-python3 batch_paraview_analysis.py --range 200 293 1 --process-id 2 &
+python3 batch_analysis_toParaview_netCDF.py --range 100 199 1 --process-id 1
+#python3 batch_paraview_analysis.py --range 100 199 1 --process-id 1 &
+#python3 batch_paraview_analysis.py --range 200 293 1 --process-id 2 &
 #python3 batch_paraview_analysis.py --range 300 399 1 --process-id 3 &
 #python3 batch_paraview_analysis.py --range 400 499 1 --process-id 4 &
 #python3 batch_paraview_analysis.py --range 500 582 1 --process-id 5 &
@@ -45,3 +50,6 @@ python3 batch_paraview_analysis.py --range 200 293 1 --process-id 2 &
 wait
 
 echo "All processes completed! Check batch_output/ for results."
+deactivate
+module purge
+

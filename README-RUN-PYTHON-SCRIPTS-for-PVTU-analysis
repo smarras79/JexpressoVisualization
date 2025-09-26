@@ -2,25 +2,14 @@
 # To process the data interactively:
 #--------------------------------------------------------------------------------------------------------
 
-# User input: 
-SCRIPT.py = "Reynolds.py"
-## SCRIPT.py = "batch_analysis_toParaview.py"
-
-
-
-
-
-
-
-#--------------------------------------------------------------------------------------------------------
 srun -p general -n 1 --ntasks-per-node=32 --qos=standard --account=smarras --time=59:00 --pty bash
 
 module purge
-
 module spider ParaView shared mpich/ge/gcc/64
 
 source /mmfs1/project/smarras/smarras/JexpressoVisualization/venv_pyvista/bin/activate
-
 pip3 install numpy pyvista tqdm xarray scipy
 
-python3 $SCRIPT.py
+python3 Reynolds.py
+##python3 batch_analysis_toParaview.py"
+
