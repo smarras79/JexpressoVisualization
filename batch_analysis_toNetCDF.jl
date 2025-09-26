@@ -1,18 +1,15 @@
 #!/usr/bin/env julia
 """
-BATCH PROCESSING implementation: All parallel pieces + Filled contours + SLURM support
-Supports command line arguments for batch processing multiple PVTU files
-Uses CairoMakie backend - pure Julia, no OpenGL/Python dependencies
-"""
+    BATCH PROCESSING: PVTU Analysis with NetCDF output
+    Extracts slices and turbulence statistics, exports to NetCDF format for Python
+    Uses only core Julia packages - no graphics dependencies
+    """
 
 using Statistics
-using CairoMakie
-using ColorSchemes
 using NearestNeighbors
 using ArgParse
 using Dates
-
-# CairoMakie is automatically used when imported - no backend configuration needed
+using NCDatasets
 
 struct CompletePVTUData
     points::Matrix{Float64}
@@ -26,45 +23,49 @@ end
 
 function parse_commandline()
     """Parse command line arguments for batch processing"""
-    s = ArgParseSettings(description = "Batch PVTU Analysis for SLURM")
+    s = ArgParseSettings(description = "Batch PVTU Analysis with Data Export")
     
     @add_arg_table! s begin
         "--range"
-            help = "File range to process: start end step"
-            nargs = 3
-            arg_type = Int
-            required = false
+        help = "File range to process: start end step"
+        nargs = 3
+        arg_type = Int
+        required = false
         "--process-id"
-            help = "Process ID for output organization"
-            arg_type = Int
-            default = 1
+        help = "Process ID for output organization"
+        arg_type = Int
+        default = 1
         "--resolution"
-            help = "Grid resolution for interpolation"
-            arg_type = Int
-            default = 200
+        help = "Grid resolution for interpolation"
+        arg_type = Int
+        default = 200
         "--output-dir"
-            help = "Output directory"
-            arg_type = String
-            default = "batch_output"
+        help = "Output directory"
+        arg_type = String
+        default = "batch_output"
         "--file-prefix"
-            help = "PVTU file prefix (e.g., 'iter_' for iter_XXX.pvtu)"
-            arg_type = String
-            default = "iter_"
+        help = "PVTU file prefix (e.g., 'iter_' for iter_XXX.pvtu)"
+        arg_type = String
+        default = "iter_"
         "--slice-coord"
-            help = "Z-coordinate for velocity slice"
-            arg_type = Float64
-            default = 0.1
+        help = "Z-coordinate for velocity slice"
+        arg_type = Float64
+        default = 0.1
         "--dry-run"
-            help = "Show files that would be processed without processing"
-            action = :store_true
+        help = "Show files that would be processed without processing"
+        action = :store_true
         "--variables"
-            help = "Variables to process (comma-separated: w,u,v)"
-            arg_type = String
-            default = "w"
+        help = "Variables to process (comma-separated: w,u,v)"
+        arg_type = String
+        default = "w"
         "--reynolds-stress"
-            help = "Reynolds stress components to calculate (comma-separated: uv,uw,vw)"
-            arg_type = String
-            default = "uv"
+        help = "Reynolds stress components to calculate (comma-separated: uv,uw,vw)"
+        arg_type = String
+        default = "uv"
+        "--export-format"
+        help = "Export format: netcdf, csv, or both"
+        arg_type = String
+        default = "netcdf"
     end
     
     return parse_args(s)
@@ -91,17 +92,14 @@ function read_single_piece_safe(filename::String)
     """Read a single VTU piece with robust, dynamic header parsing."""
     try
         file_data = read(filename)
-        # Read only the first few KB for the header to improve performance
         header_str = String(file_data[1:min(end, 4096)])
 
-        # Find the number of points from the main <Piece> tag. This is the most reliable source.
         piece_match = match(r"<Piece NumberOfPoints=\"(\d+)\"", header_str)
         if piece_match === nothing
             error("Could not find '<Piece NumberOfPoints=...>' tag")
         end
         num_points = parse(Int, piece_match.captures[1])
 
-        # Find the start of the appended binary data section
         appended_match = findfirst("<AppendedData encoding=\"raw\">", header_str)
         if appended_match === nothing
             error("Could not find AppendedData section")
@@ -113,7 +111,6 @@ function read_single_piece_safe(filename::String)
         end
         binary_start = last(appended_match) + first(underscore_match)
 
-        # Helper function to find the offset of a DataArray
         function get_offset(name_pattern)
             regex_offset = Regex("<DataArray[^>]*Name=\"$(name_pattern)\"[^>]*offset=\"(\\d+)\"")
             match_offset = match(regex_offset, header_str)
@@ -123,7 +120,6 @@ function read_single_piece_safe(filename::String)
             return parse(Int, match_offset.captures[1])
         end
 
-        # Helper function to read a block of binary data
         function read_block(offset::Int)
             header_pos = binary_start + offset
             block_size_header = reinterpret(UInt64, file_data[header_pos:header_pos+7])[1]
@@ -132,7 +128,6 @@ function read_single_piece_safe(filename::String)
             return reinterpret(Float64, file_data[data_start:data_end])
         end
 
-        # Read all data blocks
         points_raw = read_block(get_offset("Points"))
         points_matrix = reshape(points_raw, 3, num_points)
 
@@ -151,7 +146,6 @@ function read_all_parallel_pieces(pvtu_file::String)
     """Read ALL parallel VTU pieces and combine them"""
     println("=== READING: $pvtu_file ===")
     
-    # Parse PVTU file
     pvtu_content = read(pvtu_file, String)
     piece_matches = collect(eachmatch(r"<Piece\s+Source=\"([^\"]+)\"", pvtu_content))
     piece_files = [m.captures[1] for m in piece_matches]
@@ -199,8 +193,28 @@ function read_all_parallel_pieces(pvtu_file::String)
                             total_points, bounds, successful)
 end
 
+function apply_smoothing_filter(grid::Matrix{Float64}, kernel_size::Int=3)
+    """Apply a simple box filter to smooth the grid data"""
+    rows, cols = size(grid)
+    smoothed = copy(grid)
+    half_kernel = kernel_size ÷ 2
+    
+    for i in (1+half_kernel):(rows-half_kernel)
+        for j in (1+half_kernel):(cols-half_kernel)
+            window_sum = 0.0
+            count = 0
+            for di in -half_kernel:half_kernel, dj in -half_kernel:half_kernel
+                window_sum += grid[i + di, j + dj]
+                count += 1
+            end
+            smoothed[i, j] = window_sum / count
+        end
+    end
+    return smoothed
+end
+
 function create_filled_contour_slice(data::CompletePVTUData, var::String, axis::String, coord::Float64, resolution::Int)
-    """Create filled contour slice with specified resolution"""
+    """Create filled contour slice with specified resolution - export data only"""
     field_data = getproperty(data, Symbol(var))
     axis_idx = Dict("X" => 1, "Y" => 2, "Z" => 3)[uppercase(axis)]
     
@@ -219,155 +233,65 @@ function create_filled_contour_slice(data::CompletePVTUData, var::String, axis::
     
     c1_range = range(extrema(c1_data)..., length=resolution)
     c2_range = range(extrema(c2_data)..., length=resolution)
-   
-    # Convert views to regular arrays
+    
     c1_array = collect(c1_data)
     c2_array = collect(c2_data)
     
-    # IMPROVED INTERPOLATION: Use weighted average instead of nearest neighbor
     grid_data = zeros(length(c1_range), length(c2_range))
     
-    # Calculate reasonable search radius based on point density
     total_area = (maximum(c1_array) - minimum(c1_array)) * (maximum(c2_array) - minimum(c2_array))
     avg_point_spacing = sqrt(total_area / length(c1_array))
     search_radius = 2.0 * avg_point_spacing
     
-    # Build KDTree for efficient neighbor search
     tree_data = [c1_array c2_array]'
     kdtree = KDTree(tree_data)
     
+    total_points = length(c1_range) * length(c2_range)
+    progress_interval = max(1, total_points ÷ 20)
+    processed = 0
+    
     for (i, c1) in enumerate(c1_range), (j, c2) in enumerate(c2_range)
-        # Find all points within search radius
         neighbors = inrange(kdtree, [c1, c2], search_radius)
         
         if !isempty(neighbors)
-            # Weighted average based on inverse distance
             weights = Float64[]
             values  = Float64[]
             
             for neighbor_idx in neighbors
                 dist = sqrt((c1 - c1_array[neighbor_idx])^2 + (c2 - c2_array[neighbor_idx])^2)
-                weight = 1.0 / (dist + 1e-12)  # Add small epsilon to avoid division by zero
+                weight = 1.0 / (dist + 1e-12)
                 push!(weights, weight)
                 push!(values, slice_field[neighbor_idx])
             end
             
-            # Weighted average
             grid_data[i, j] = sum(weights .* values) / sum(weights)
         else
-            # Fallback to nearest neighbor if no points in radius
             nearest_idx, _ = nn(kdtree, [c1, c2])
             grid_data[i, j] = slice_field[nearest_idx]
         end
+        
+        processed += 1
+        if processed % progress_interval == 0
+            progress = round(100 * processed / total_points, digits=1)
+            println("  Interpolation progress: $(progress)%")
+        end
     end
     
-    # Apply smoothing filter to reduce remaining noise
     grid_data = apply_smoothing_filter(grid_data)
     
     axis_names = ["X", "Y", "Z"]
     return c1_range, c2_range, grid_data, axis_names[other_axes[1]], axis_names[other_axes[2]]
 end
 
-function plot_filled_contours(c1_range, c2_range, grid, xl, yl, var, axis, coord, file)
-    """Plot filled contours with CairoMakie (pure Julia, no external dependencies)"""
-    println("Creating plot: $file")
-    
-    try
-        # Create figure with CairoMakie
-        fig = Figure(size = (1400, 1000), fontsize = 18)
-        ax = Axis(fig[1, 1], 
-                 xlabel = xl, 
-                 ylabel = yl, 
-                 title = "$var slice at $axis = $coord", 
-                 aspect = DataAspect())
-        
-        # Calculate sensible contour levels
-        data_min, data_max = extrema(grid)
-        data_range = data_max - data_min
-        
-        # Use adaptive number of levels based on data range
-        if abs(data_range) < 1e-10
-            levels = 10  # Fallback for nearly constant data
-        else
-            levels = 30  # More levels for smoother appearance
-        end
-        
-        # Create contour plot with CairoMakie
-        co = contourf!(ax, c1_range, c2_range, grid', 
-                      levels = levels, 
-                      colormap = :viridis,
-                      extendlow = :auto,
-                      extendhigh = :auto)
-        
-        # Add colorbar
-        Colorbar(fig[1, 2], co, label = var)
-        
-        # Add contour lines for better visualization
-        contour!(ax, c1_range, c2_range, grid', 
-                levels = levels÷2, 
-                color = :black, 
-                alpha = 0.3, 
-                linewidth = 0.5)
-        
-        # Save plot
-        save(file, fig, px_per_unit = 2)
-        println("✓ Saved: $file")
-        
-    catch e
-        println("✗ Failed to save: $file - $e")
-        # Try alternative save without px_per_unit
-        try
-            fig = Figure(size = (1400, 1000), fontsize = 18)
-            ax = Axis(fig[1, 1], 
-                     xlabel = xl, 
-                     ylabel = yl, 
-                     title = "$var slice at $axis = $coord", 
-                     aspect = DataAspect())
-            
-            co = contourf!(ax, c1_range, c2_range, grid', 
-                          levels = 30, 
-                          colormap = :viridis)
-            
-            Colorbar(fig[1, 2], co, label = var)
-            
-            save(file, fig)
-            println("✓ Saved: $file (fallback method)")
-        catch e2
-            println("✗ Failed to save with fallback: $file - $e2")
-        end
-    end
-end
-
-# Smoothing filter to reduce noise
-function apply_smoothing_filter(grid::Matrix{Float64}, kernel_size::Int=3)
-    """Apply a simple box filter to smooth the grid data"""
-    rows, cols = size(grid)
-    smoothed = copy(grid)
-    half_kernel = kernel_size ÷ 2
-    
-    for i in (1+half_kernel):(rows-half_kernel)
-        for j in (1+half_kernel):(cols-half_kernel)
-            # Average over kernel window
-            window_sum = 0.0
-            count = 0
-            for di in -half_kernel:half_kernel, dj in -half_kernel:half_kernel
-                window_sum += grid[i + di, j + dj]
-                count += 1
-            end
-            smoothed[i, j] = window_sum / count
-        end
-    end
-    return smoothed
-end
-
 function calculate_reynolds_stress_contours(data::CompletePVTUData, comp::String, avg_axis::String, resolution::Int)
-    """Calculate Reynolds stress contours with specified resolution"""
-    # Calculate fluctuating components
+    """Calculate Reynolds stress contours with specified resolution - export data only"""
+    println("\n=== REYNOLDS STRESS: <$comp'> averaged over $avg_axis ===")
+    println("Using resolution: $(resolution)×$(resolution)")
+    
     u_p = data.u .- mean(data.u)
     v_p = data.v .- mean(data.v)
     w_p = data.w .- mean(data.w)
     
-    # Calculate Reynolds stress properly
     if comp == "uv"
         rs_data = u_p .* v_p
     elseif comp == "uw"
@@ -387,17 +311,30 @@ function calculate_reynolds_stress_contours(data::CompletePVTUData, comp::String
     axis_idx = Dict("X" => 1, "Y" => 2, "Z" => 3)[uppercase(avg_axis)]
     other_axes = filter(x -> x != axis_idx, [1, 2, 3])
     
-    c1_data = view(data.points, other_axes[1], :)
-    c2_data = view(data.points, other_axes[2], :)
+    if avg_axis == "Y"
+        c1_data = view(data.points, 1, :)
+        c2_data = view(data.points, 3, :)
+        axis1_name, axis2_name = "X", "Z"
+    elseif avg_axis == "X"
+        c1_data = view(data.points, 2, :)
+        c2_data = view(data.points, 3, :)
+        axis1_name, axis2_name = "Y", "Z"
+    elseif avg_axis == "Z"
+        c1_data = view(data.points, 1, :)
+        c2_data = view(data.points, 2, :)
+        axis1_name, axis2_name = "X", "Y"
+    else
+        error("Unknown averaging axis: $avg_axis")
+    end
     
     c1_range = range(extrema(c1_data)..., length=resolution)
     c2_range = range(extrema(c2_data)..., length=resolution)
     
-    # IMPROVED REYNOLDS STRESS INTERPOLATION
+    println("Projecting onto $(axis1_name)-$(axis2_name) plane (averaging over $avg_axis)")
+    
     c1_array = collect(c1_data)
     c2_array = collect(c2_data)
     
-    # Calculate reasonable search radius
     total_area = (maximum(c1_array) - minimum(c1_array)) * (maximum(c2_array) - minimum(c2_array))
     avg_point_spacing = sqrt(total_area / length(c1_array))
     search_radius = 2.0 * avg_point_spacing
@@ -405,11 +342,13 @@ function calculate_reynolds_stress_contours(data::CompletePVTUData, comp::String
     tree_data = [c1_array c2_array]'
     kdtree = KDTree(tree_data)
     
-    # Pre-allocate the grid for better performance
     rs_grid = zeros(length(c1_range), length(c2_range))
     
+    total_points = length(c1_range) * length(c2_range)
+    progress_interval = max(1, total_points ÷ 20)
+    processed = 0
+    
     for (i, c1) in enumerate(c1_range), (j, c2) in enumerate(c2_range)
-        # Use weighted interpolation for Reynolds stress too
         neighbors = inrange(kdtree, [c1, c2], search_radius)
         
         if !isempty(neighbors)
@@ -428,13 +367,155 @@ function calculate_reynolds_stress_contours(data::CompletePVTUData, comp::String
             nearest_idx, _ = nn(kdtree, [c1, c2])
             rs_grid[i, j] = rs_data[nearest_idx]
         end
+        
+        processed += 1
+        if processed % progress_interval == 0
+            progress = round(100 * processed / total_points, digits=1)
+            println("  Reynolds stress interpolation progress: $(progress)%")
+        end
     end
     
-    # Apply smoothing
     rs_grid = apply_smoothing_filter(rs_grid)
     
-    axis_names = ["X", "Y", "Z"]
-    return c1_range, c2_range, rs_grid, axis_names[other_axes[1]], axis_names[other_axes[2]]
+    return c1_range, c2_range, rs_grid, axis1_name, axis2_name
+end
+
+function export_to_netcdf(c1_range, c2_range, grid, xl, yl, var, axis, coord, filename)
+    """Export grid data to NetCDF format for Python analysis"""
+    println("Exporting to NetCDF: $filename")
+    
+    try
+        # Convert ranges to arrays
+        c1_array = collect(c1_range)
+        c2_array = collect(c2_range)
+        
+        # Create NetCDF file
+        NCDataset(filename, "c") do ds
+            # Define dimensions
+            defDim(ds, "x", length(c1_array))
+            defDim(ds, "y", length(c2_array))
+            
+            # Define coordinate variables
+            x_var = defVar(ds, "x", Float64, ("x",))
+            y_var = defVar(ds, "y", Float64, ("y",))
+            
+            # Define data variable
+            data_var = defVar(ds, var, Float64, ("x", "y"))
+            
+            # Write coordinate data
+            x_var[:] = c1_array
+            y_var[:] = c2_array
+            
+            # Write grid data
+            data_var[:, :] = grid
+            
+            # Add attributes
+            x_var.attrib["long_name"] = xl
+            x_var.attrib["units"] = "m"  # Assuming meters - adjust as needed
+            
+            y_var.attrib["long_name"] = yl
+            y_var.attrib["units"] = "m"  # Assuming meters - adjust as needed
+            
+            data_var.attrib["long_name"] = var
+            data_var.attrib["slice_axis"] = axis
+            data_var.attrib["slice_coordinate"] = coord
+            
+            # Global attributes
+            ds.attrib["title"] = "$var slice at $axis = $coord"
+            ds.attrib["created"] = string(Dates.now())
+            ds.attrib["source"] = "Julia PVTU Analysis"
+            ds.attrib["resolution"] = "$(length(c1_array))x$(length(c2_array))"
+            ds.attrib["data_min"] = minimum(grid)
+            ds.attrib["data_max"] = maximum(grid)
+            ds.attrib["x_min"] = minimum(c1_array)
+            ds.attrib["x_max"] = maximum(c1_array)
+            ds.attrib["y_min"] = minimum(c2_array)
+            ds.attrib["y_max"] = maximum(c2_array)
+        end
+        
+        println("✓ Successfully exported NetCDF: $filename")
+        return true
+        
+    catch e
+        println("✗ Failed to export NetCDF: $filename - $e")
+        return false
+    end
+end
+
+function export_data(c1_range, c2_range, grid, xl, yl, var, axis, coord, base_filename, format::String)
+    """Export grid data in specified format"""
+    
+    if format == "netcdf" || format == "both"
+        # Export as NetCDF
+        netcdf_file = base_filename * ".nc"
+        export_to_netcdf(c1_range, c2_range, grid, xl, yl, var, axis, coord, netcdf_file)
+    end
+    
+    if format == "csv" || format == "both"
+        # Export as CSV with coordinates
+        csv_file = base_filename * ".csv"
+        
+        println("Exporting CSV: $csv_file")
+        
+        # Create metadata
+        metadata = Dict(
+            "variable" => var,
+            "axis" => axis,
+            "coordinate" => coord,
+            "x_label" => xl,
+            "y_label" => yl,
+            "x_min" => minimum(c1_range),
+            "x_max" => maximum(c1_range),
+            "y_min" => minimum(c2_range),
+            "y_max" => maximum(c2_range),
+            "resolution" => "$(length(c1_range))x$(length(c2_range))",
+            "data_min" => minimum(grid),
+            "data_max" => maximum(grid),
+            "timestamp" => string(Dates.now())
+        )
+        
+        # Create coordinate arrays
+        c1_array = collect(c1_range)
+        c2_array = collect(c2_range)
+        
+        # Prepare data for export: x, y, value
+        export_data_array = Float64[]
+        x_coords = Float64[]
+        y_coords = Float64[]
+        
+        for i in 1:length(c1_range), j in 1:length(c2_range)
+            push!(x_coords, c1_array[i])
+            push!(y_coords, c2_array[j])
+            push!(export_data_array, grid[i, j])
+        end
+        
+        # Write CSV file
+        try
+            open(csv_file, "w") do io
+                # Write header
+                println(io, "X,Y,$var")
+                
+                # Write data
+                for k in 1:length(x_coords)
+                    println(io, "$(x_coords[k]),$(y_coords[k]),$(export_data_array[k])")
+                end
+            end
+            
+            # Write metadata file
+            meta_file = base_filename * "_metadata.txt"
+            open(meta_file, "w") do io
+                for (key, value) in metadata
+                    println(io, "$key: $value")
+                end
+            end
+            
+            println("✓ Exported CSV: $csv_file")
+            println("✓ Exported metadata: $meta_file")
+            
+        catch e
+            println("✗ Failed to export CSV: $csv_file - $e")
+        end
+    end
 end
 
 function process_single_file(pvtu_file::String, args::Dict, process_id::Int)
@@ -443,18 +524,14 @@ function process_single_file(pvtu_file::String, args::Dict, process_id::Int)
     println("PROCESSING: $pvtu_file (Process $process_id)")
     println("="^80)
     
-    # Extract file identifier for output naming
     file_base = replace(basename(pvtu_file), ".pvtu" => "")
     
     try
-        # Read data
         data = read_all_parallel_pieces(pvtu_file)
         
-        # Parse variables and Reynolds stress components - convert to String
         variables = [String(strip(var)) for var in split(args["variables"], ",")]
         reynolds_components = [String(strip(comp)) for comp in split(args["reynolds-stress"], ",")]
         
-        # Create output directory
         output_dir = joinpath(args["output-dir"], "process_$(process_id)")
         mkpath(output_dir)
         
@@ -463,8 +540,8 @@ function process_single_file(pvtu_file::String, args::Dict, process_id::Int)
             if var in ["u", "v", "w"]
                 println("\n--- Processing velocity slice: $var ---")
                 c1, c2, grid, xl, yl = create_filled_contour_slice(data, var, "Z", args["slice-coord"], args["resolution"])
-                output_file = joinpath(output_dir, "$(file_base)_$(var)_slice_$(args["resolution"]).png")
-                plot_filled_contours(c1, c2, grid, xl, yl, var, "Z", args["slice-coord"], output_file)
+                base_filename = joinpath(output_dir, "$(file_base)_$(var)_slice_$(args["resolution"])")
+                export_data(c1, c2, grid, xl, yl, var, "Z", args["slice-coord"], base_filename, args["export-format"])
             else
                 println("Skipping unknown variable: $var (valid: u, v, w)")
             end
@@ -475,10 +552,10 @@ function process_single_file(pvtu_file::String, args::Dict, process_id::Int)
             if comp in ["uv", "uw", "vw", "uu", "vv", "ww"] && !isempty(comp)
                 println("\n--- Processing Reynolds stress: $comp ---")
                 c1, c2, rs_grid, xl, yl = calculate_reynolds_stress_contours(data, comp, "Y", args["resolution"])
-                output_file = joinpath(output_dir, "$(file_base)_reynolds_$(comp)_$(args["resolution"]).png")
-                plot_filled_contours(c1, c2, rs_grid, xl, yl, "Reynolds <$(comp)'>", "Y-avg", 0.0, output_file)
+                base_filename = joinpath(output_dir, "$(file_base)_reynolds_$(comp)_$(args["resolution"])")
+                export_data(c1, c2, rs_grid, xl, yl, "Reynolds <$(comp)'>", "Y-avg", 0.0, base_filename, args["export-format"])
             elseif !isempty(comp)
-                println("Skipping unknown Reynolds stress component: $comp (valid: uv, uw, vw, uu, vv, ww)")
+                println("Skipping unknown Reynolds stress component: $comp")
             end
         end
         
@@ -497,18 +574,16 @@ function main()
     args = parse_commandline()
     
     println("="^80)
-    println("BATCH PVTU ANALYSIS - Process $(args["process-id"])")
+    println("MINIMAL PVTU ANALYSIS - Process $(args["process-id"])")
     println("Started: $(Dates.now())")
     println("="^80)
     
-    # Print configuration
     println("Configuration:")
     for (key, value) in args
         println("  $key: $value")
     end
     println()
     
-    # Determine files to process
     local available_files::Vector{String}
     local missing_files::Vector{Int} = Int[]
     
@@ -521,89 +596,71 @@ function main()
         if !isempty(missing_files)
             println("Missing files (indices): $(missing_files)")
         end
-        
     else
-        # Process all PVTU files in current directory
         available_files = filter(f -> endswith(f, ".pvtu"), readdir("."))
         println("Processing all PVTU files in current directory: $(length(available_files)) files")
         
         if isempty(available_files)
-            println("No PVTU files found in current directory!")
-            println("Current directory contents:")
-            for file in readdir(".")
-                if contains(file, args["file-prefix"]) || endswith(file, ".pvtu")
-                    println("  $file")
-                end
+            println("No files to process!")
+            println("\nTroubleshooting:")
+            println("1. Check if you're in the correct directory")
+            println("2. Verify PVTU files exist with prefix '$(args["file-prefix"])'")
+            println("3. Use --range START END STEP to specify file range")
+            println("4. Use --dry-run to see what files would be processed")
+            return
+        end
+        
+        # Process files
+        successful = 0
+        failed = 0
+        start_time = time()
+        
+        for (i, file) in enumerate(available_files)
+            println("\n[$(i)/$(length(available_files))] Processing: $file")
+            
+            if process_single_file(file, args, args["process-id"])
+                successful += 1
+            else
+                failed += 1
+            end
+            
+            # Progress update
+            elapsed = time() - start_time
+            avg_time_per_file = elapsed / i
+            estimated_remaining = avg_time_per_file * (length(available_files) - i)
+            
+            println("Progress: $(i)/$(length(available_files)) files completed")
+            println("Elapsed: $(round(elapsed/60, digits=2)) min, Estimated remaining: $(round(estimated_remaining/60, digits=2)) min")
+        end
+        
+        # Final summary
+        total_time = time() - start_time
+        println("\n" * "="^80)
+        println("BATCH PROCESSING COMPLETE - Process $(args["process-id"])")
+        println("="^80)
+        println("Total files processed: $(length(available_files))")
+        println("Successful: $successful")
+        println("Failed: $failed")
+        println("Total time: $(round(total_time/60, digits=2)) minutes")
+        println("Average time per file: $(round(total_time/length(available_files), digits=2)) seconds")
+        println("Finished: $(Dates.now())")
+        println("="^80)
+        
+        # Show output summary
+        if successful > 0
+            output_dir = joinpath(args["output-dir"], "process_$(args["process-id"])")
+            if isdir(output_dir)
+                nc_files = length(filter(f -> endswith(f, ".nc"), readdir(output_dir)))
+                csv_files = length(filter(f -> endswith(f, ".csv"), readdir(output_dir)))
+                println("\nOutput files generated:")
+                println("  NetCDF files: $nc_files")
+                println("  CSV files: $csv_files")
+                println("  Output directory: $output_dir")
             end
         end
     end
-    
-    # Handle dry run
-    if args["dry-run"]
-        println("\nDRY RUN - Files that would be processed:")
-        for file in available_files
-            println("  $file")
-        end
-        println("\nTotal: $(length(available_files)) files")
-        return
-    end
-    
-    if isempty(available_files)
-        println("No files to process!")
-        println("\nTroubleshooting:")
-        println("1. Check if you're in the correct directory")
-        println("2. Verify PVTU files exist with prefix '$(args["file-prefix"])'")
-        println("3. Use --range START END STEP to specify file range")
-        println("4. Use --dry-run to see what files would be processed")
-        return
-    end
-    
-    # Process files
-    successful = 0
-    failed = 0
-    start_time = time()
-    
-    for (i, file) in enumerate(available_files)
-        println("\n[$(i)/$(length(available_files))] Processing: $file")
-        
-        if process_single_file(file, args, args["process-id"])
-            successful += 1
-        else
-            failed += 1
-        end
-        
-        # Progress update
-        elapsed = time() - start_time
-        avg_time_per_file = elapsed / i
-        estimated_remaining = avg_time_per_file * (length(available_files) - i)
-        
-        println("Progress: $(i)/$(length(available_files)) files completed")
-        println("Elapsed: $(round(elapsed/60, digits=2)) min, Estimated remaining: $(round(estimated_remaining/60, digits=2)) min")
-    end
-    
-    # Final summary
-    total_time = time() - start_time
-    println("\n" * "="^80)
-    println("BATCH PROCESSING COMPLETE - Process $(args["process-id"])")
-    println("="^80)
-    println("Total files processed: $(length(available_files))")
-    println("Successful: $successful")
-    println("Failed: $failed")
-    println("Total time: $(round(total_time/60, digits=2)) minutes")
-    println("Average time per file: $(round(total_time/length(available_files), digits=2)) seconds")
-    println("Finished: $(Dates.now())")
-    println("="^80)
-end
+end 
 
 # Run main function
-if abspath(PROGRAM_FILE) == @__FILE__
-    try
-        using NearestNeighbors, CairoMakie, ColorSchemes, ArgParse, Dates
-    catch
-        using Pkg
-        Pkg.add.(["NearestNeighbors", "CairoMakie", "ColorSchemes", "ArgParse", "Dates"])
-        using NearestNeighbors, CairoMakie, ColorSchemes, ArgParse, Dates
-    end
-    
-    main()
-end
+main()
+
