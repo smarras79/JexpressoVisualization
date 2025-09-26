@@ -7,21 +7,22 @@ import xarray as xr
 from tqdm import tqdm
 from datetime import datetime
 from scipy.interpolate import griddata
-from itertools import combinations_with_replacement
+from itertools import combinations_with_replacement, product as cartesian_product
 
 def calculate_and_save_netcdf(
     data_directory: str,
     file_pattern: str,
-    output_filename: str = "reynolds_stresses.nc",
-    variables: list = ['u', 'v', 'w'],
+    output_filename: str = "turbulence_statistics.nc",
+    vel_variables: list = ['u', 'v', 'w'],
+    scalar_variables: list = [],
     coord_precision: int = 6,
     base_resolution: int = 256,
     start_step: int = None,
     end_step: int = None
 ):
     """
-    Calculates Reynolds stresses, skipping any unreadable files, and saves the
-    results to a NetCDF file after robust interpolation.
+    Calculates Reynolds stresses, heat fluxes, triple moments, and other turbulence
+    statistics, skipping any unreadable files. Saves results to a NetCDF file.
     """
     # --- 1. FILE DISCOVERY AND FILTERING (No changes) ---
     print("🔍 Finding and filtering data files...")
@@ -56,72 +57,112 @@ def calculate_and_save_netcdf(
     num_xz_points = len(unique_xz)
     print(f"Identified {num_xz_points} unique (x, z) points for averaging.")
 
-    # --- 2. PERFORM TWO-PASS CALCULATION (MODIFIED FOR ROBUSTNESS) ---
-    print("\n--- Pass 1 of 2: Calculating sums for mean velocities ---")
-    sums = {var: np.zeros(num_xz_points, dtype=np.float64) for var in variables}
+    all_variables = vel_variables + scalar_variables
+
+    # --- 2. PERFORM TWO-PASS CALCULATION (No changes) ---
+    print("\n--- Pass 1 of 2: Calculating sums for mean quantities ---")
+    sums = {var: np.zeros(num_xz_points, dtype=np.float64) for var in all_variables}
     per_location_counts = np.zeros(num_xz_points, dtype=np.int64)
-    
-    # ### --- NEW: ADD A COUNTER FOR SUCCESFULLY PROCESSED FILES --- ###
     successful_file_count = 0
 
     for fpath in tqdm(pvtu_files, desc="Processing files for means"):
-        # ### --- NEW: TRY/EXCEPT BLOCK TO SKIP BAD FILES --- ###
         try:
             mesh = pv.read(fpath)
-            # This check ensures the mesh has points and the expected data
-            if mesh.n_points == 0 or not all(v in mesh.point_data for v in variables):
-                raise ValueError("Mesh is empty or missing required variables.")
+            if mesh.n_points == 0 or not all(v in mesh.point_data for v in all_variables):
+                missing_vars = [v for v in all_variables if v not in mesh.point_data]
+                raise ValueError(f"Mesh is empty or missing required variables: {missing_vars}")
             
-            for var in variables:
+            for var in all_variables:
                 np.add.at(sums[var], inverse_indices, mesh.point_data[var])
             
-            # Count y-points only on the first successful read
             if successful_file_count == 0:
                 np.add.at(per_location_counts, inverse_indices, 1)
             
             successful_file_count += 1
             
         except Exception as e:
-            # Print a warning and continue to the next file
             tqdm.write(f"\n⚠️ WARNING: Skipping file '{os.path.basename(fpath)}' due to error: {e}")
             continue
 
     if successful_file_count == 0:
         raise RuntimeError("Could not successfully read any files. Aborting.")
         
-    # ### --- MODIFIED: CALCULATE TOTAL COUNT BASED ON SUCCESSFUL READS --- ###
     total_counts = per_location_counts * successful_file_count
-    means = {var: np.divide(sums[var], total_counts, where=total_counts > 0) for var in variables}
+    means = {var: np.divide(sums[var], total_counts, where=total_counts > 0) for var in all_variables}
 
-    print(f"\n--- Pass 2 of 2: Calculating Reynolds stress components (based on {successful_file_count} files) ---")
-    stress_keys = [f"{v1}'{v2}'" for v1, v2 in combinations_with_replacement(variables, 2)]
+    print(f"\n--- Pass 2 of 2: Calculating fluctuations and moments (based on {successful_file_count} files) ---")
+    
+    stress_keys = [f"{v1}'{v2}'" for v1, v2 in combinations_with_replacement(vel_variables, 2)]
     stress_sums = {key: np.zeros(num_xz_points, dtype=np.float64) for key in stress_keys}
     
+    vel_triple_keys = [f"{v1}'{v2}'{v3}'" for v1, v2, v3 in combinations_with_replacement(vel_variables, 3)]
+    mixed_triple_keys = [f"{v1}'{v2}'{s}'" for s in scalar_variables for v1, v2 in combinations_with_replacement(vel_variables, 2)]
+    triple_sums = {key: np.zeros(num_xz_points, dtype=np.float64) for key in vel_triple_keys + mixed_triple_keys}
+    
+    scalar_variance_keys = [f"{s}'{s}'" for s in scalar_variables]
+    heat_flux_keys = [f"{v}'{s}'" for s in scalar_variables for v in vel_variables]
+    scalar_sums = {key: np.zeros(num_xz_points, dtype=np.float64) for key in scalar_variance_keys + heat_flux_keys}
+    
     for fpath in tqdm(pvtu_files, desc="Processing files for fluctuations"):
-        # ### --- NEW: TRY/EXCEPT BLOCK TO SKIP BAD FILES CONSISTENTLY --- ###
         try:
             mesh = pv.read(fpath)
-            if mesh.n_points == 0 or not all(v in mesh.point_data for v in variables):
+            if mesh.n_points == 0 or not all(v in mesh.point_data for v in all_variables):
                 raise ValueError("Mesh is empty or missing required variables.")
                 
-            fluctuations = {var: mesh.point_data[var] - means[var][inverse_indices] for var in variables}
-            for v1, v2 in combinations_with_replacement(variables, 2):
+            fluctuations = {var: mesh.point_data[var] - means[var][inverse_indices] for var in all_variables}
+
+            for v1, v2 in combinations_with_replacement(vel_variables, 2):
                 product = fluctuations[v1] * fluctuations[v2]
                 np.add.at(stress_sums[f"{v1}'{v2}'"], inverse_indices, product)
-                
+            
+            for s in scalar_variables:
+                product_var = fluctuations[s] * fluctuations[s]
+                np.add.at(scalar_sums[f"{s}'{s}'"], inverse_indices, product_var)
+                for v in vel_variables:
+                    product_flux = fluctuations[v] * fluctuations[s]
+                    np.add.at(scalar_sums[f"{v}'{s}'"], inverse_indices, product_flux)
+
+            for v1, v2, v3 in combinations_with_replacement(vel_variables, 3):
+                product = fluctuations[v1] * fluctuations[v2] * fluctuations[v3]
+                np.add.at(triple_sums[f"{v1}'{v2}'{v3}'"], inverse_indices, product)
+            
+            for s in scalar_variables:
+                for v1, v2 in combinations_with_replacement(vel_variables, 2):
+                    product = fluctuations[v1] * fluctuations[v2] * fluctuations[s]
+                    np.add.at(triple_sums[f"{v1}'{v2}'{s}'"], inverse_indices, product)
+                    
         except Exception:
-            # We already warned in Pass 1, so we can just skip silently here
             continue
             
     reynolds_stresses = {key: np.divide(stress_sums[key], total_counts, where=total_counts > 0) for key in stress_keys}
+    triple_moments = {key: np.divide(triple_sums[key], total_counts, where=total_counts > 0) for key in triple_sums}
+    scalar_stats = {key: np.divide(scalar_sums[key], total_counts, where=total_counts > 0) for key in scalar_sums}
 
-    # --- 3. ROBUST DELAUNAY-BASED INTERPOLATION (No changes) ---
+    # --- 3. ROBUST DELAUNAY-BASED INTERPOLATION ---
     print(f"\n📈 Performing robust Delaunay interpolation...")
-    all_point_data = {f"mean_{var}": data for var, data in means.items()}
+    all_point_data = {}
+    for var, data in means.items():
+        all_point_data[f"mean_{var}"] = data
     for key, data in reynolds_stresses.items():
         clean_key = key.replace("'", "")
         all_point_data[f"reynolds_stress_{clean_key}"] = data
         
+    ### --- BUG FIX: Correctly separate and add scalar statistics --- ###
+    # Add scalar variances to the data dictionary
+    for key_format in scalar_variance_keys:
+        clean_key = key_format.replace("'", "")
+        all_point_data[f"scalar_variance_{clean_key}"] = scalar_stats[key_format]
+
+    # Add heat fluxes to the data dictionary
+    for key_format in heat_flux_keys:
+        clean_key = key_format.replace("'", "")
+        all_point_data[f"heat_flux_{clean_key}"] = scalar_stats[key_format]
+    ### --- END FIX --- ###
+
+    for key, data in triple_moments.items():
+        clean_key = key.replace("'", "")
+        all_point_data[f"triple_moment_{clean_key}"] = data
+
     x_min, x_max, z_min, z_max = unique_xz[:, 0].min(), unique_xz[:, 0].max(), unique_xz[:, 1].min(), unique_xz[:, 1].max()
     x_range, z_range = x_max - x_min, z_max - z_min
     if x_range >= z_range:
@@ -137,21 +178,20 @@ def calculate_and_save_netcdf(
     grid_x, grid_z = np.meshgrid(x_coords, z_coords)
 
     data_vars = {}
-    for field_name, point_values in all_point_data.items():
-        print(f"  Interpolating {field_name}...")
+    for field_name, point_values in tqdm(all_point_data.items(), desc="Interpolating fields"):
         interpolated_array = griddata(
             points=unique_xz, values=point_values, xi=(grid_x, grid_z),
             method='linear', fill_value=np.nan
         )
         data_vars[field_name] = (('z', 'x'), interpolated_array)
 
-    # --- 4. CONSTRUCT XARRAY DATASET AND SAVE TO NETCDF (No changes) ---
+    # --- 4. CONSTRUCT XARRAY DATASET AND SAVE TO NETCDF ---
     print(f"💾 Constructing dataset and saving to NetCDF file '{output_filename}'...")
     ds = xr.Dataset(data_vars, coords={'x': ('x', x_coords), 'z': ('z', z_coords)})
     ds.x.attrs.update(units='m', long_name='Streamwise Coordinate')
     ds.z.attrs.update(units='m', long_name='Wall-Normal Coordinate')
     ds.attrs.update(
-        title='Time-Spanwise Averaged Reynolds Stresses and Mean Velocities',
+        title='Time-Spanwise Averaged Turbulence Statistics',
         source_directory=data_directory,
         creation_date=str(datetime.now()),
         processed_files=successful_file_count
@@ -162,23 +202,30 @@ def calculate_and_save_netcdf(
 
 if __name__ == '__main__':
     # --- CONFIGURATION ---
-    #DATA_DIR = "/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/output-10240x10240x3000"
-    DATA_DIR = "/scratch/smarras/smarras/output/64x64x36_5kmX5kmX3km/CompEuler/LESsmago/output"
+    # IMPORTANT: Update this to your actual data directory
+    DATA_DIR = "/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/output-10240x10240x3000"
     FILE_PATTERN = "iter_*.pvtu"
-    OUTPUT_NC_FILE = "reynolds_stresses.nc"
+    OUTPUT_NC_FILE = "turbulence_statistics.nc"
     BASE_GRID_RESOLUTION = 512
     START_STEP = 150
     END_STEP = 1000
+    
+    # --- VARIABLE DEFINITION ---
+    VELOCITY_VARS = ['u', 'v', 'w']
+    # If your scalar is named 'T', change 'theta' to 'T'. Use [] if you have no scalars.
+    SCALAR_VARS = ['θ', 'p']
 
     # --- EXECUTION ---
     if not os.path.isdir(DATA_DIR):
         print(f"\n❌ Error: The specified data directory does not exist: {DATA_DIR}")
+        print("Please update the 'DATA_DIR' variable in the script.")
     else:
         calculate_and_save_netcdf(
             data_directory=DATA_DIR,
             file_pattern=FILE_PATTERN,
             output_filename=OUTPUT_NC_FILE,
-            variables=['u', 'v', 'w'],
+            vel_variables=VELOCITY_VARS,
+            scalar_variables=SCALAR_VARS,
             base_resolution=BASE_GRID_RESOLUTION,
             start_step=START_STEP,
             end_step=END_STEP
