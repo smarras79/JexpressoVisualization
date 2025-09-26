@@ -24,7 +24,7 @@ echo "Working directory: $(pwd)"
 #=============================================
 # CONFIGURATION PARAMETERS
 #=============================================
-SCRIPT_NAME="batch_julia_analysis.jl"        # Your Julia script name
+SCRIPT_NAME="batch_analysis_toNetCDF.jl"     # Your Julia script name
 FILE_PREFIX="iter_"                          # PVTU file prefix
 RESOLUTION=200                               # Grid resolution (100, 200, 400, 800)
 SLICE_COORD=0.1                              # Z-coordinate for velocity slices
