@@ -91,8 +91,8 @@ BATCH_CONFIG = {
 PROCESSING_OPTIONS = {
     'output_directory': './batch_output/',
     'continue_on_error': True,
-    'paraview_executable': 'pvpython',
-    #'paraview_executable': '/Applications/ParaView-5.11.2.app/Contents/bin/pvpython',
+    #'paraview_executable': 'pvpython',
+    'paraview_executable': '/Applications/ParaView-5.11.2.app/Contents/bin/pvpython',
     'paraview_args': ['--force-offscreen-rendering'],
     'timeout_seconds': 300,  # 5 minutes per file
     'log_file_prefix': 'batch_processing',  # Will add process ID
