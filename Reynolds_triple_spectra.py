@@ -91,7 +91,7 @@ def calculate_and_plot_spanwise_spectra(pvtu_files, variables, output_filename):
     plt.style.use('seaborn-v0_8-whitegrid'); fig, ax = plt.subplots(figsize=(10, 8))
     colors = {'u': 'r', 'v': 'g', 'w': 'b', 'θ': 'orange'}
     for var in variables:
-        var_label = var.replace('θ', r'\theta'); label_str = f"$E_{{{var_label}}}(k_y)$"
+        var_label = var.replace('θ', r'theta'); label_str = f"$E_{{{var_label}}}(k_y)$"
         ax.loglog(k_y, avg_psd[var], color=colors.get(var, 'k'), label=label_str)
     if len(k_y) > 20:
         k_ref_start_index = max(5, int(len(k_y) * 0.1)); k_ref_end_index = min(len(k_y) - 10, int(len(k_y) * 0.4))
