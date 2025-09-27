@@ -27,23 +27,7 @@ pip3 install numpy pyvista tqdm xarray scipy
 # python3 batch_paraview_analysis.py --dry-run
 #=============================================
 # Then split the work across processes:
-python3 batch_analysis_toParaview_netCDF.py --range 100 199 1 --process-id 1
-#python3 batch_paraview_analysis.py --range 100 199 1 --process-id 1 &
-#python3 batch_paraview_analysis.py --range 200 293 1 --process-id 2 &
-#python3 batch_paraview_analysis.py --range 300 399 1 --process-id 3 &
-#python3 batch_paraview_analysis.py --range 400 499 1 --process-id 4 &
-#python3 batch_paraview_analysis.py --range 500 582 1 --process-id 5 &
-
-
-#echo "Ensuring Julia packages are installed..."
-#julia -e 'using Pkg; Pkg.add(["ArgParse", "Dates"])' #<-- EXAMPLE: Add ArgParse
-
-#julia --project batch_paraview_analysis.jl --range 1000 199 1 --process-id 1 &
-#julia --project batch_paraview_analysis.jl --range 200 299 1 --process-id 2 &
-#julia --project batch_paraview_analysis.jl --range 300 399 1 --process-id 3 &
-#julia --project batch_paraview_analysis.jl --range 400 499 1 --process-id 4 &
-#julia --project batch_paraview_analysis.jl --range 500 582 1 --process-id 5 &
-#julia --project batch_paraview_analysis.jl --range 500 582 1 --process-id 5 &
+python3 Reynold_triple_spectra.py
 
 
 # Wait for all processes to complete
