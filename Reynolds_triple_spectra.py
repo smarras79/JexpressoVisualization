@@ -128,8 +128,10 @@ def interpolate_and_save_3d_snapshot(pvtu_files, variables, output_filename):
     ds_3d = xr.Dataset(coords={'x': ('x', x), 'y': ('y', y), 'z': ('z', z)})
     for var in variables:
         if var in interpolated_grid.point_data:
+            # Replace 'θ' with 'theta' for the variable name
+            sanitized_name = var.replace('θ', 'theta')
             data_3d = interpolated_grid.point_data[var].reshape(nz, ny, nx)
-            ds_3d[var] = (('z', 'y', 'x'), data_3d)
+            ds_3d[sanitized_name] = (('z', 'y', 'x'), data_3d)            
     print(f"   Saving 3D snapshot to '{output_filename}'...")
     ds_3d.to_netcdf(output_filename)
     print(f"✅ 3D snapshot saved successfully.")
