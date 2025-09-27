@@ -210,7 +210,6 @@ def process_and_save_instantaneous_slices(
 
     print("✅ Instantaneous slice processing complete.")
 
-
 def calculate_and_save_averaged_stats(
     data_directory: str,
     file_pattern: str,
@@ -293,13 +292,34 @@ def calculate_and_save_averaged_stats(
     
     print(f"\n📈 Performing robust Delaunay interpolation...")
     all_point_data = {}
-    for var, data in means.items(): all_point_data[f"mean_{var}"] = data
-    for key, data in reynolds_stresses.items(): all_point_data[get_primed_name(key, all_variables)] = data
+    
+    # SANITIZE VARIABLE NAMES for NetCDF compatibility
+    def sanitize_var_name(name):
+        """Replace Unicode characters that cause NetCDF encoding issues"""
+        return name.replace('θ', 'theta')
+    
+    for var, data in means.items(): 
+        sanitized_name = sanitize_var_name(f"mean_{var}")
+        all_point_data[sanitized_name] = data
+        
+    for key, data in reynolds_stresses.items(): 
+        sanitized_name = sanitize_var_name(get_primed_name(key, all_variables))
+        all_point_data[sanitized_name] = data
+        
     scalar_variance_keys = [f"{s}'{s}'" for s in scalar_variables]
     scalar_flux_keys = [f"{v}'{s}'" for s in scalar_variables for v in vel_variables]
-    for key_format in scalar_variance_keys: all_point_data[get_primed_name(key_format, all_variables)] = scalar_stats[key_format]
-    for key_format in scalar_flux_keys: all_point_data[get_primed_name(key_format, all_variables)] = scalar_stats[key_format]
-    for key, data in triple_moments.items(): all_point_data[get_primed_name(key, all_variables)] = data
+    
+    for key_format in scalar_variance_keys: 
+        sanitized_name = sanitize_var_name(get_primed_name(key_format, all_variables))
+        all_point_data[sanitized_name] = scalar_stats[key_format]
+        
+    for key_format in scalar_flux_keys: 
+        sanitized_name = sanitize_var_name(get_primed_name(key_format, all_variables))
+        all_point_data[sanitized_name] = scalar_stats[key_format]
+        
+    for key, data in triple_moments.items(): 
+        sanitized_name = sanitize_var_name(get_primed_name(key, all_variables))
+        all_point_data[sanitized_name] = data
 
     x_min, x_max, z_min, z_max = unique_xz[:, 0].min(), unique_xz[:, 0].max(), unique_xz[:, 1].min(), unique_xz[:, 1].max()
     nx, nz = base_resolutionx, base_resolutionz
@@ -335,7 +355,7 @@ def calculate_and_save_averaged_stats(
         plot_second_moment_profiles(ds, second_moment_plot_dir)
         
     return pvtu_files
-
+  
 if __name__ == '__main__':
     # --- CONFIGURATION ---
     #DATA_DIR = "/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/output-10240x10240x3000"
