@@ -336,7 +336,8 @@ def calculate_and_save_averaged_stats(
 
 if __name__ == '__main__':
     # --- CONFIGURATION ---
-    DATA_DIR = "/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/output-10240x10240x3000"
+    #DATA_DIR = "/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/output-10240x10240x3000"
+    DATA_DIR = "/scratch/smarras/smarras/output/64x64x36_5kmX5kmX3km/CompEuler/LESsmago/output/"
     FILE_PATTERN = "iter_*.pvtu"
     OUTPUT_NC_AVERAGED_FILE = "turbulence_statistics_averaged.nc" # File for all time-averaged data
     PROFILE_PLOT_FILE = "vertical_wind_profile.png"
