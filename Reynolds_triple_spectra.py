@@ -10,10 +10,16 @@ from scipy.interpolate import griddata
 from itertools import combinations_with_replacement, product as cartesian_product
 import matplotlib.pyplot as plt
 
+# --- NEW: Moved sanitize_var_name to the top level for global use ---
+def sanitize_var_name(name):
+    """Replace Unicode characters that cause NetCDF encoding issues"""
+    return name.replace('θ', 'theta')
+
 def get_primed_name(key, all_vars):
     # (This helper function remains the same)
     clean_key = key.replace("'", "")
-    prime_map = {var: f"{var.replace('θ', 'theta')}p" for var in all_vars}
+    # --- MODIFIED: Uses the global sanitize_var_name function ---
+    prime_map = {var: f"{sanitize_var_name(var)}p" for var in all_vars}
     components = []
     i = 0
     while i < len(clean_key):
@@ -128,10 +134,10 @@ def interpolate_and_save_3d_snapshot(pvtu_files, variables, output_filename):
     ds_3d = xr.Dataset(coords={'x': ('x', x), 'y': ('y', y), 'z': ('z', z)})
     for var in variables:
         if var in interpolated_grid.point_data:
-            # Replace 'θ' with 'theta' for the variable name
-            sanitized_name = var.replace('θ', 'theta')
+            # --- MODIFIED: Uses the global sanitize_var_name function for consistency ---
+            sanitized_name = sanitize_var_name(var)
             data_3d = interpolated_grid.point_data[var].reshape(nz, ny, nx)
-            ds_3d[sanitized_name] = (('z', 'y', 'x'), data_3d)            
+            ds_3d[sanitized_name] = (('z', 'y', 'x'), data_3d)
     print(f"   Saving 3D snapshot to '{output_filename}'...")
     ds_3d.to_netcdf(output_filename)
     print(f"✅ 3D snapshot saved successfully.")
@@ -144,13 +150,14 @@ def process_and_save_instantaneous_slices(
     base_resolutionz,
     x_slice_loc,
     y_slice_loc,
-    z_slice_loc):
+    z_slice_loc
+):
     """
     NEW: Loops through every file, extracts slices, and saves each to a separate NC file.
     """
     print(f"\n🔪 Extracting instantaneous 2D slices for each timestep...")
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Use a regex to extract the step number for unique filenames
     pattern = re.compile(r'(\d+)\.pvtu$')
 
@@ -164,10 +171,10 @@ def process_and_save_instantaneous_slices(
             mesh = mesh_container.combine() if isinstance(mesh_container, pv.MultiBlock) else mesh_container
             bounds = mesh.bounds
             center = mesh.center
-            
+
             data_vars = {}
             coords = {}
-            
+
             slice_locations = {'x': x_slice_loc, 'y': y_slice_loc, 'z': z_slice_loc}
 
             for dim, loc in slice_locations.items():
@@ -180,12 +187,9 @@ def process_and_save_instantaneous_slices(
                     if plane.n_points > 0:
                         for var in all_variables:
                             if var in plane.point_data:
-                                var_name = f"{var}_slice_{dim}{int(loc)}"
-                                
-                                # --- FIX: Sanitize the variable name here ---
-                                sanitized_var_name = var_name.replace('θ', 'theta')
-                                # --------------------------------------------
-
+                                # --- MODIFIED: Sanitize variable name before using it ---
+                                sanitized_var = sanitize_var_name(var)
+                                var_name = f"{sanitized_var}_slice_{dim}{int(loc)}"
                                 if dim == 'x': # yz plane
                                     points, c1_name, c2_name = plane.points[:, 1:], 'y', 'z'
                                     c1_coords = np.linspace(bounds[2], bounds[3], base_resolutionz); c2_coords = np.linspace(bounds[4], bounds[5], base_resolutionz)
@@ -198,14 +202,12 @@ def process_and_save_instantaneous_slices(
 
                                 grid_c1, grid_c2 = np.meshgrid(c1_coords, c2_coords)
                                 data_slice = griddata(points, plane[var], (grid_c1, grid_c2), method='linear')
-                                
+
                                 c1_coord_name = f"{c1_name}_{dim}slice"; c2_coord_name = f"{c2_name}_{dim}slice"
-                                
-                                # Use the sanitized name as the key for the dataset
-                                data_vars[sanitized_var_name] = ((c2_coord_name, c1_coord_name), data_slice)
+                                data_vars[var_name] = ((c2_coord_name, c1_coord_name), data_slice)
                                 coords[c1_coord_name] = (c1_coord_name, c1_coords)
                                 coords[c2_coord_name] = (c2_coord_name, c2_coords)
-            
+
             if data_vars:
                 ds_slice = xr.Dataset(data_vars, coords=coords)
                 slice_filename = os.path.join(output_dir, f"slices_step_{step}.nc")
@@ -295,35 +297,32 @@ def calculate_and_save_averaged_stats(
     reynolds_stresses = {key: np.divide(stress_sums[key], total_counts, where=total_counts > 0) for key in stress_sums}
     triple_moments = {key: np.divide(triple_sums[key], total_counts, where=total_counts > 0) for key in triple_sums}
     scalar_stats = {key: np.divide(scalar_sums[key], total_counts, where=total_counts > 0) for key in scalar_sums}
-    
+
     print(f"\n📈 Performing robust Delaunay interpolation...")
     all_point_data = {}
-    
-    # SANITIZE VARIABLE NAMES for NetCDF compatibility
-    def sanitize_var_name(name):
-        """Replace Unicode characters that cause NetCDF encoding issues"""
-        return name.replace('θ', 'theta')
-    
-    for var, data in means.items(): 
+
+    # --- MODIFIED: Removed the local sanitize_var_name function as it's now global ---
+
+    for var, data in means.items():
         sanitized_name = sanitize_var_name(f"mean_{var}")
         all_point_data[sanitized_name] = data
-        
-    for key, data in reynolds_stresses.items(): 
+
+    for key, data in reynolds_stresses.items():
         sanitized_name = sanitize_var_name(get_primed_name(key, all_variables))
         all_point_data[sanitized_name] = data
-        
+
     scalar_variance_keys = [f"{s}'{s}'" for s in scalar_variables]
     scalar_flux_keys = [f"{v}'{s}'" for s in scalar_variables for v in vel_variables]
-    
-    for key_format in scalar_variance_keys: 
+
+    for key_format in scalar_variance_keys:
         sanitized_name = sanitize_var_name(get_primed_name(key_format, all_variables))
         all_point_data[sanitized_name] = scalar_stats[key_format]
-        
-    for key_format in scalar_flux_keys: 
+
+    for key_format in scalar_flux_keys:
         sanitized_name = sanitize_var_name(get_primed_name(key_format, all_variables))
         all_point_data[sanitized_name] = scalar_stats[key_format]
-        
-    for key, data in triple_moments.items(): 
+
+    for key, data in triple_moments.items():
         sanitized_name = sanitize_var_name(get_primed_name(key, all_variables))
         all_point_data[sanitized_name] = data
 
@@ -343,7 +342,7 @@ def calculate_and_save_averaged_stats(
     ds.attrs.update(title='Time-Averaged Turbulence Statistics', source_directory=data_directory, creation_date=str(datetime.now()), processed_files=successful_file_count)
     ds.to_netcdf(output_filename)
     print("\n✅ Time-averaged calculations are complete. Data saved to NetCDF.")
-    
+
     # --- Plotting from the averaged data ---
     if profile_plot_filename:
         print(f"📊 Generating and saving vertical wind profile to '{profile_plot_filename}'...")
@@ -359,9 +358,9 @@ def calculate_and_save_averaged_stats(
 
     if second_moment_plot_dir:
         plot_second_moment_profiles(ds, second_moment_plot_dir)
-        
+
     return pvtu_files
-  
+
 if __name__ == '__main__':
     # --- CONFIGURATION ---
     DATA_DIR = "/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/64x64x36_5kmX5kmX3km"
@@ -377,13 +376,13 @@ if __name__ == '__main__':
     BASE_GRID_RESOLUTIONZ = 300
     START_STEP = 150
     END_STEP = 1000
-    
+
     # --- SLICE & 3D SNAPSHOT CONFIGURATION ---
     WRITE_3D_SNAPSHOT = False
     X_SLICE_LOC = 2560.0
     Y_SLICE_LOC = 2560.0
     Z_SLICE_LOC = 100.0
-    
+
     # --- VARIABLE DEFINITION ---
     VELOCITY_VARS = ['u', 'v', 'w']
     SCALAR_VARS = ['θ', 'p']
@@ -400,7 +399,7 @@ if __name__ == '__main__':
             start_step=START_STEP, end_step=END_STEP,
             profile_plot_filename=PROFILE_PLOT_FILE, second_moment_plot_dir=SECOND_MOMENT_PLOT_DIR
         )
-        
+
         # 2. Process and save instantaneous 2D slices for each timestep
         if INSTANTANEOUS_SLICE_DIR:
             process_and_save_instantaneous_slices(
