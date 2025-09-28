@@ -144,8 +144,7 @@ def process_and_save_instantaneous_slices(
     base_resolutionz,
     x_slice_loc,
     y_slice_loc,
-    z_slice_loc
-):
+    z_slice_loc):
     """
     NEW: Loops through every file, extracts slices, and saves each to a separate NC file.
     """
@@ -182,6 +181,11 @@ def process_and_save_instantaneous_slices(
                         for var in all_variables:
                             if var in plane.point_data:
                                 var_name = f"{var}_slice_{dim}{int(loc)}"
+                                
+                                # --- FIX: Sanitize the variable name here ---
+                                sanitized_var_name = var_name.replace('θ', 'theta')
+                                # --------------------------------------------
+
                                 if dim == 'x': # yz plane
                                     points, c1_name, c2_name = plane.points[:, 1:], 'y', 'z'
                                     c1_coords = np.linspace(bounds[2], bounds[3], base_resolutionz); c2_coords = np.linspace(bounds[4], bounds[5], base_resolutionz)
@@ -196,7 +200,9 @@ def process_and_save_instantaneous_slices(
                                 data_slice = griddata(points, plane[var], (grid_c1, grid_c2), method='linear')
                                 
                                 c1_coord_name = f"{c1_name}_{dim}slice"; c2_coord_name = f"{c2_name}_{dim}slice"
-                                data_vars[var_name] = ((c2_coord_name, c1_coord_name), data_slice)
+                                
+                                # Use the sanitized name as the key for the dataset
+                                data_vars[sanitized_var_name] = ((c2_coord_name, c1_coord_name), data_slice)
                                 coords[c1_coord_name] = (c1_coord_name, c1_coords)
                                 coords[c2_coord_name] = (c2_coord_name, c2_coords)
             
