@@ -364,7 +364,8 @@ def calculate_and_save_averaged_stats(
 if __name__ == '__main__':
     # --- CONFIGURATION ---
     #DATA_DIR = "/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/64x64x36_5kmX5kmX3km"
-    DATA_DIR = "/scratch/smarras/smarras/output/64x64x36_5kmX5kmX3km/CompEuler-CFL-at2200s/LESsmago/output/tmp"
+    DATA_DIR = "/scratch/smarras/smarras/output/64x64x36_10kmX10kmX3km_mount100m/CompEuler/LESsmagoMount/output/"
+    #DATA_DIR = "/scratch/smarras/smarras/output/64x64x36_5kmX5kmX3km/CompEuler-CFL-at2200s/LESsmago/output/"
     FILE_PATTERN = "iter_*.pvtu"
     OUTPUT_NC_AVERAGED_FILE = "turbulence_statistics_averaged.nc" # File for all time-averaged data
     PROFILE_PLOT_FILE = "vertical_wind_profile.png"
@@ -374,8 +375,8 @@ if __name__ == '__main__':
     INSTANTANEOUS_SLICE_DIR = "instantaneous_slices" # NEW: Directory for per-timestep slice files
     BASE_GRID_RESOLUTIONX = 512
     BASE_GRID_RESOLUTIONZ = 300
-    START_STEP = 150
-    END_STEP = 1000
+    START_STEP = 200
+    END_STEP = 300
 
     # --- SLICE & 3D SNAPSHOT CONFIGURATION ---
     WRITE_3D_SNAPSHOT = False
