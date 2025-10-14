@@ -9,6 +9,7 @@ from datetime import datetime
 from scipy.interpolate import griddata
 from itertools import combinations_with_replacement, product as cartesian_product
 import matplotlib.pyplot as plt
+import shutil
 
 # --- NEW: Moved sanitize_var_name to the top level for global use ---
 def sanitize_var_name(name):
@@ -364,20 +365,38 @@ def calculate_and_save_averaged_stats(
 if __name__ == '__main__':
     # --- CONFIGURATION ---
     #DATA_DIR = "/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/64x64x36_5kmX5kmX3km"
-    DATA_DIR = "/scratch/smarras/smarras/output/64x64x36_10kmX10kmX3km_mount100m/CompEuler/LESsmagoMount/output/"
+    #DATA_DIR = "/scratch/smarras/smarras/output/64x64x48_5kmX5kmX3km_128cores/CompEuler/LESsmago/output/"
+    #DATA_DIR = "/scratch/smarras/smarras/output/32x32x24_5kmX5kmX3km/CompEuler/LESsmago32x32x24/output/"
     #DATA_DIR = "/scratch/smarras/smarras/output/64x64x36_5kmX5kmX3km/CompEuler-CFL-at2200s/LESsmago/output/"
+    DATA_DIR = "/scratch/smarras/hw59/output/LESICP2_80x40x45_nop6_10kmX5kmX2dot8km_2/CompEuler/LESICP2/output"
     FILE_PATTERN = "iter_*.pvtu"
-    OUTPUT_NC_AVERAGED_FILE = "turbulence_statistics_averaged.nc" # File for all time-averaged data
-    PROFILE_PLOT_FILE = "vertical_wind_profile.png"
-    SECOND_MOMENT_PLOT_DIR = "second_moment_profiles"
-    SPECTRA_PLOT_FILE = "turbulent_spanwise_spectra_time_averaged.png"
-    SNAPSHOT_3D_NC_FILE = "snapshot_3d.nc"
-    INSTANTANEOUS_SLICE_DIR = "instantaneous_slices" # NEW: Directory for per-timestep slice files
     BASE_GRID_RESOLUTIONX = 512
     BASE_GRID_RESOLUTIONZ = 300
-    START_STEP = 200
-    END_STEP = 300
+    START_STEP = 400
+    END_STEP = 659
 
+    OUTPUT_NC_AVERAGED_FILE = DATA_DIR + "/400to659turbulence_statistics_averaged.nc" # File for all time-averaged data
+    PROFILE_PLOT_FILE = DATA_DIR + "/400to659vertical_wind_profile.png"
+    SECOND_MOMENT_PLOT_DIR = DATA_DIR + "/400to659second_moment_profiles"
+    SPECTRA_PLOT_FILE = DATA_DIR + "/400to659turbulent_spanwise_spectra_time_averaged.png"
+    SNAPSHOT_3D_NC_FILE = DATA_DIR + "/400to659snapshot_3d.nc"
+    INSTANTANEOUS_SLICE_DIR = DATA_DIR + "/400to659instantaneous_slice/" # NEW: Directory for per-timestep slice files
+    
+
+    ## --- 1. Create a single timestamped directory for all run outputs ---
+    ## This line creates a new directory like 'DATA_DIR/20251008_103118_run_output'
+    #output_dir = os.path.join(DATA_DIR, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_run_output")
+    #os.makedirs(output_dir, exist_ok=True)
+    #
+    ## --- 2. Define all file and directory paths inside the new output directory ---
+    ## All generated data will now be neatly saved in the folder created above.
+    #OUTPUT_NC_AVERAGED_FILE = os.path.join(output_dir, "turbulence_statistics_averaged.nc")
+    #PROFILE_PLOT_FILE = os.path.join(output_dir, "vertical_wind_profile.png")
+    #SECOND_MOMENT_PLOT_DIR = os.path.join(output_dir, "second_moment_profiles")
+    #SPECTRA_PLOT_FILE = os.path.join(output_dir, "turbulent_spanwise_spectra_time_averaged.png")
+    #SNAPSHOT_3D_NC_FILE = os.path.join(output_dir, "snapshot_3d.nc")
+    #INSTANTANEOUS_SLICE_DIR = os.path.join(output_dir, "instantaneous_slice/")
+    
     # --- SLICE & 3D SNAPSHOT CONFIGURATION ---
     WRITE_3D_SNAPSHOT = False
     X_SLICE_LOC = 2560.0
@@ -421,3 +440,4 @@ if __name__ == '__main__':
             interpolate_and_save_3d_snapshot(
                 pvtu_files=processed_files, variables=VELOCITY_VARS + SCALAR_VARS, output_filename=SNAPSHOT_3D_NC_FILE
             )
+            
