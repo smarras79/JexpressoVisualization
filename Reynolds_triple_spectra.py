@@ -111,6 +111,103 @@ def calculate_and_plot_spanwise_spectra(pvtu_files, variables, output_filename):
     ax.set_ylim(bottom=1e-9); ax.legend(fontsize=12); ax.tick_params(axis='both', which='major', labelsize=12)
     plt.savefig(output_filename, dpi=300, bbox_inches='tight'); plt.close(fig)
     print(f"✅ Time-averaged spectra plot saved successfully to {output_filename}")
+    
+    # --- NEW: Save spectrum data to NetCDF ---
+    print(f"💾 Saving spectrum data to NetCDF...")
+    nc_filename = output_filename.replace('.png', '.nc')
+    
+    # Create dataset with wavenumber as coordinate
+    data_vars = {}
+    for var in variables:
+        sanitized_var = sanitize_var_name(var)
+        data_vars[f'E_{sanitized_var}'] = (('k_y',), avg_psd[var])
+    
+    ds_spectrum = xr.Dataset(
+        data_vars,
+        coords={'k_y': ('k_y', k_y)}
+    )
+    
+    # Add metadata attributes
+    ds_spectrum.k_y.attrs.update({
+        'units': 'm^-1',
+        'long_name': 'Spanwise wavenumber',
+        'description': 'Wavenumber in the spanwise (y) direction'
+    })
+    
+    for var in variables:
+        sanitized_var = sanitize_var_name(var)
+        ds_spectrum[f'E_{sanitized_var}'].attrs.update({
+            'units': 'm^3 s^-2',
+            'long_name': f'Power spectral density of {var}',
+            'description': f'Time-averaged 1D energy spectrum for {var} velocity component'
+        })
+    
+    ds_spectrum.attrs.update({
+        'title': 'Time-Averaged 1D Spanwise Turbulent Energy Spectra',
+        'description': f'1D spanwise spectra extracted at x={actual_x:.2f}m, z={actual_z:.2f}m',
+        'extraction_location_x': actual_x,
+        'extraction_location_z': actual_z,
+        'spanwise_extent_Ly': Ly,
+        'number_of_points': Ny,
+        'number_of_timesteps_averaged': spectra_success_count,
+        'creation_date': str(datetime.now())
+    })
+    
+    ds_spectrum.to_netcdf(nc_filename)
+    print(f"✅ Spectrum data saved to {nc_filename}")
+    
+def calculate_and_plot_spanwise_spectra_old(pvtu_files, variables, output_filename):
+    # (This spectra function remains the same)
+    print(f"\n⚡ Calculating and plotting time-averaged spanwise spectra...")
+    if not pvtu_files: return
+    try:
+        mesh_container = pv.read(pvtu_files[0])
+        mesh = mesh_container.combine(merge_points=False) if isinstance(mesh_container, pv.MultiBlock) else mesh_container
+    except Exception as e:
+        print(f"❌ ERROR: Could not read first file for spectra setup. Reason: {e}"); return
+    points = mesh.points; bounds = mesh.bounds
+    center_x = (bounds[0] + bounds[1]) / 2; center_z = (bounds[4] + bounds[5]) / 2
+    closest_point_idx = np.argmin(np.sqrt((points[:, 0] - center_x)**2 + (points[:, 2] - center_z)**2))
+    actual_x, _, actual_z = points[closest_point_idx]
+    indices = np.where((np.isclose(points[:, 0], actual_x)) & (np.isclose(points[:, 2], actual_z)))[0]
+    if len(indices) < 2: print("⚠️ Could not find a line of data in the y-direction. Skipping spectra."); return
+    y_coords = points[indices, 1]; sort_order = np.argsort(y_coords)
+    indices = indices[sort_order]; y_coords = y_coords[sort_order]
+    Ly = y_coords.max() - y_coords.min(); Ny = len(y_coords)
+    k_y = 2 * np.pi * np.fft.fftfreq(Ny, d=Ly/Ny)[:Ny//2]
+    psd_sums = {var: np.zeros(Ny // 2) for var in variables}; spectra_success_count = 0
+    for fpath in tqdm(pvtu_files, desc="Calculating spectra for each timestep"):
+        try:
+            mesh_container = pv.read(fpath)
+            mesh = mesh_container.combine(merge_points=False) if isinstance(mesh_container, pv.MultiBlock) else mesh_container
+            if not all(v in mesh.point_data for v in variables): continue
+            for var in variables:
+                fluctuations = mesh.point_data[var][indices] - np.mean(mesh.point_data[var][indices])
+                fft_coeffs = np.fft.fft(fluctuations)
+                psd = (np.abs(fft_coeffs)**2) / (Ny**2)
+                psd_sums[var] += psd[:Ny//2]
+            spectra_success_count += 1
+        except Exception as e:
+            tqdm.write(f"\n⚠️ WARNING: Could not process {os.path.basename(fpath)} for spectra. Reason: {e}")
+            continue
+    if spectra_success_count == 0: print("❌ ERROR: No files could be processed for spectra. Aborting plot."); return
+    avg_psd = {var: psd_sums[var] / spectra_success_count for var in variables}
+    plt.style.use('seaborn-v0_8-whitegrid'); fig, ax = plt.subplots(figsize=(10, 8))
+    colors = {'u': 'r', 'v': 'g', 'w': 'b', 'θ': 'orange'}
+    for var in variables:
+        var_label = var.replace('θ', r'theta'); label_str = f"$E_{{{var_label}}}(k_y)$"
+        ax.loglog(k_y, avg_psd[var], color=colors.get(var, 'k'), label=label_str)
+    if len(k_y) > 20:
+        k_ref_start_index = max(5, int(len(k_y) * 0.1)); k_ref_end_index = min(len(k_y) - 10, int(len(k_y) * 0.4))
+        if k_ref_start_index < k_ref_end_index:
+            k_ref = np.array([k_y[k_ref_start_index], k_y[k_ref_end_index]])
+            ref_energy = avg_psd['u'][k_ref_start_index]
+            ax.plot(k_ref, ref_energy * (k_ref/k_ref[0])**(-5/3), 'k--', label="$k_y^{-5/3}$ Slope")
+    ax.set_xlabel('Spanwise Wavenumber, $k_y$ [m$^{-1}$]', fontsize=14); ax.set_ylabel('Time-Averaged Power Spectral Density, $E(k_y)$', fontsize=14)
+    ax.set_title(f'1D Spanwise Turbulent Spectra at z={actual_z:.2f}m (Avg. of {spectra_success_count} files)', fontsize=16, weight='bold')
+    ax.set_ylim(bottom=1e-9); ax.legend(fontsize=12); ax.tick_params(axis='both', which='major', labelsize=12)
+    plt.savefig(output_filename, dpi=300, bbox_inches='tight'); plt.close(fig)
+    print(f"✅ Time-averaged spectra plot saved successfully to {output_filename}")
 
 
 def interpolate_and_save_3d_snapshot(pvtu_files, variables, output_filename):
