@@ -206,12 +206,13 @@ def calculate_and_save_netcdf(
 if __name__ == '__main__':
     # --- CONFIGURATION ---
     # IMPORTANT: Update this to your actual data directory
-    DATA_DIR = "/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/output-10240x10240x3000"
+    #DATA_DIR = "/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/output-10240x10240x3000"
+    DATA_DIR = "/scratch/smarras/smarras/output/64x64x36_5kmX5kmX3km/CompEuler/LESsmago/output/"
     FILE_PATTERN = "iter_*.pvtu"
     OUTPUT_NC_FILE = "turbulence_statistics.nc"
     BASE_GRID_RESOLUTIONX = 512 #512
     BASE_GRID_RESOLUTIONZ = 300 #512
-    START_STEP = 150
+    START_STEP = 200
     END_STEP = 1000
     
     # --- VARIABLE DEFINITION ---
