@@ -339,6 +339,190 @@ def process_and_save_instantaneous_slices(
 
     print("✅ Instantaneous slice processing complete.")
 
+def calculate_and_save_ustar_profile(
+    pvtu_files: list,
+    z1: float,
+    z0: float,
+    kappa: float,
+    output_filename: str,
+    coord_precision: int = 6
+):
+    """
+    Calculate time and spanwise-averaged friction velocity profile u*_ave(x).
+    
+    Uses the logarithmic law: u* = κ * U(z1) / ln(z1/z0)
+    where U(z1) = sqrt(u(z1)^2 + v(z1)^2) is horizontal wind speed at height z1.
+    
+    Parameters:
+    -----------
+    pvtu_files : list
+        List of PVTU file paths to process
+    z1 : float
+        Height at which to evaluate velocity (m)
+    z0 : float
+        Roughness length (m)
+    kappa : float
+        von Kármán constant (typically 0.4)
+    output_filename : str
+        Path for output NetCDF file
+    coord_precision : int
+        Decimal precision for rounding coordinates
+    
+    Returns:
+    --------
+    dict : Dictionary containing 'x' coordinates and 'ustar_ave' values
+    """
+    print(f"\n🌪️  Calculating friction velocity u* profile...")
+    print(f"   Parameters: z1={z1:.2f}m, z0={z0:.4f}m, κ={kappa:.2f}")
+    print(f"   Formula: u* = κ × sqrt(u²+v²) / ln(z1/z0)")
+    
+    if not pvtu_files:
+        print("❌ ERROR: No files provided for u* calculation.")
+        return None
+    
+    # Check that z1 > z0
+    if z1 <= z0:
+        raise ValueError(f"z1 ({z1}) must be greater than z0 ({z0})")
+    
+    log_term = np.log(z1 / z0)
+    print(f"   ln(z1/z0) = ln({z1:.2f}/{z0:.4f}) = {log_term:.4f}")
+    
+    # Read first file to get spatial structure at z1
+    try:
+        first_mesh = pv.read(pvtu_files[0])
+        points = first_mesh.points
+        
+        # Find all points at height z1 (within tolerance)
+        z_tolerance = 0.1  # 10 cm tolerance for finding z1 level
+        at_z1 = np.abs(points[:, 2] - z1) < z_tolerance
+        
+        if not np.any(at_z1):
+            raise ValueError(f"No points found at z1={z1:.2f}m (tolerance={z_tolerance}m). "
+                           f"Available z range: [{points[:, 2].min():.2f}, {points[:, 2].max():.2f}]")
+        
+        points_at_z1 = points[at_z1]
+        print(f"   Found {len(points_at_z1)} points at z ≈ {z1:.2f}m")
+        
+        # Get unique (x, y) positions at z1
+        xy_coords = np.round(points_at_z1[:, :2], decimals=coord_precision)
+        unique_xy, inverse_indices_ref = np.unique(xy_coords, axis=0, return_inverse=True)
+        num_xy_points = len(unique_xy)
+        print(f"   Identified {num_xy_points} unique (x, y) points at z1")
+        
+    except Exception as e:
+        print(f"❌ ERROR: Could not read first file. Reason: {e}")
+        return None
+    
+    # Initialize accumulator for time-averaging u*
+    ustar_sum = np.zeros(num_xy_points, dtype=np.float64)
+    successful_files = 0
+    
+    # Process each timestep
+    for fpath in tqdm(pvtu_files, desc="Processing files for u*"):
+        try:
+            mesh = pv.read(fpath)
+            
+            # Check that required variables exist
+            if 'u' not in mesh.point_data or 'v' not in mesh.point_data:
+                tqdm.write(f"⚠️ WARNING: File {os.path.basename(fpath)} missing u or v. Skipping.")
+                continue
+            
+            points = mesh.points
+            
+            # Find points at z1
+            at_z1 = np.abs(points[:, 2] - z1) < z_tolerance
+            if not np.any(at_z1):
+                continue
+            
+            # Extract velocities at z1
+            u_at_z1 = mesh.point_data['u'][at_z1]
+            v_at_z1 = mesh.point_data['v'][at_z1]
+            points_at_z1 = points[at_z1]
+            
+            # Calculate horizontal wind speed U = sqrt(u^2 + v^2)
+            U_at_z1 = np.sqrt(u_at_z1**2 + v_at_z1**2)
+            
+            # Calculate u* at each point: u* = κ * U / ln(z1/z0)
+            ustar_instantaneous = (kappa * U_at_z1) / log_term
+            
+            # Map to unique (x,y) positions
+            xy_coords_file = np.round(points_at_z1[:, :2], decimals=coord_precision)
+            inverse_indices = np.zeros(len(xy_coords_file), dtype=np.int64)
+            for i, xy in enumerate(xy_coords_file):
+                matches = np.where(np.all(np.isclose(unique_xy, xy), axis=1))[0]
+                if len(matches) > 0:
+                    inverse_indices[i] = matches[0]
+            
+            # Accumulate u* for time averaging
+            np.add.at(ustar_sum, inverse_indices, ustar_instantaneous)
+            successful_files += 1
+            
+        except Exception as e:
+            tqdm.write(f"⚠️ WARNING: Error processing {os.path.basename(fpath)}: {e}")
+            continue
+    
+    if successful_files == 0:
+        print("❌ ERROR: No files successfully processed for u*.")
+        return None
+    
+    # Time-average u*
+    ustar_time_avg = ustar_sum / successful_files
+    print(f"   Time-averaged u* over {successful_files} timesteps")
+    print(f"   u* range: [{ustar_time_avg.min():.4f}, {ustar_time_avg.max():.4f}] m/s")
+    print(f"   u* mean: {ustar_time_avg.mean():.4f} m/s")
+    
+    # Now average in spanwise (y) direction to get u*_ave(x)
+    print(f"   Averaging u* in spanwise (y) direction...")
+    
+    # Group by x-coordinate
+    x_coords = unique_xy[:, 0]
+    unique_x = np.unique(x_coords)
+    ustar_vs_x = np.zeros(len(unique_x))
+    
+    for i, x_val in enumerate(unique_x):
+        # Find all (x,y) points with this x value
+        x_mask = np.isclose(x_coords, x_val)
+        # Average u* over all y at this x
+        ustar_vs_x[i] = np.mean(ustar_time_avg[x_mask])
+    
+    print(f"   Final u*_ave(x) profile: {len(unique_x)} x-points")
+    print(f"   u*_ave range: [{ustar_vs_x.min():.4f}, {ustar_vs_x.max():.4f}] m/s")
+    
+    # Save to NetCDF
+    print(f"💾 Saving u* profile to '{output_filename}'...")
+    ds_ustar = xr.Dataset(
+        {'ustar_ave': (('x',), ustar_vs_x)},
+        coords={'x': ('x', unique_x)}
+    )
+    
+    ds_ustar['ustar_ave'].attrs.update({
+        'units': 'm s^-1',
+        'long_name': 'Time and spanwise-averaged friction velocity',
+        'description': 'u* calculated from log law: u* = κ*U(z1)/ln(z1/z0)',
+        'formula': 'u* = kappa * sqrt(u^2 + v^2) / ln(z1/z0)'
+    })
+    
+    ds_ustar.x.attrs.update({
+        'units': 'm',
+        'long_name': 'Streamwise coordinate'
+    })
+    
+    ds_ustar.attrs.update({
+        'title': 'Friction Velocity Profile',
+        'z1': z1,
+        'z0': z0,
+        'kappa': kappa,
+        'log_term': float(log_term),
+        'n_timesteps': successful_files,
+        'creation_date': str(datetime.now())
+    })
+    
+    ds_ustar.to_netcdf(output_filename)
+    print(f"✅ u* profile saved to NetCDF")
+    
+    return {'x': unique_x, 'ustar_ave': ustar_vs_x}
+
+
 def calculate_and_save_averaged_stats(
     data_directory: str,
     file_pattern: str,
@@ -608,14 +792,67 @@ def calculate_and_save_averaged_stats(
 
     return pvtu_files
 
+def plot_ustar_profile(ustar_data, output_filename, z1, z0, kappa):
+    """
+    Create a plot of the u* profile.
+    
+    Parameters:
+    -----------
+    ustar_data : dict
+        Dictionary with 'x' and 'ustar_ave' arrays
+    output_filename : str
+        Path for output PNG file
+    z1, z0, kappa : float
+        Parameters used in calculation
+    """
+    if ustar_data is None:
+        print("⚠️ No u* data to plot.")
+        return
+    
+    print(f"📊 Generating u* profile plot...")
+    
+    try:
+        plt.style.use('seaborn-v0_8-whitegrid')
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        x = ustar_data['x']
+        ustar = ustar_data['ustar_ave']
+        
+        ax.plot(x, ustar, color='darkred', linewidth=2.5, marker='o', 
+                markersize=4, markevery=max(1, len(x)//20))
+        
+        # Add mean line
+        ustar_mean = np.mean(ustar)
+        ax.axhline(ustar_mean, color='gray', linestyle='--', linewidth=1.5, 
+                   label=f'Mean = {ustar_mean:.4f} m/s')
+        
+        ax.set_xlabel('Streamwise Position, x [m]', fontsize=12)
+        ax.set_ylabel('Friction Velocity, $u_*$ [m s$^{-1}$]', fontsize=12)
+        ax.set_title(f'Time and Spanwise-Averaged Friction Velocity Profile\n' + 
+                     f'$u_* = \\kappa \\times U(z_1) / \\ln(z_1/z_0)$  ' +
+                     f'($z_1$={z1:.1f}m, $z_0$={z0:.4f}m, $\\kappa$={kappa:.2f})',
+                     fontsize=13, weight='bold')
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis='both', which='major', labelsize=10)
+        
+        plt.tight_layout()
+        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        
+        print(f"✅ u* profile plot saved to {output_filename}")
+        
+    except Exception as e:
+        print(f"❌ ERROR: Could not generate u* plot. Reason: {e}")
+
 if __name__ == '__main__':
     # --- CONFIGURATION ---
-    DATA_DIR = "/scratch/smarras/hw59/output/LESICP2_80x40x45_nop6_10kmX5kmX2dot8km_2/CompEuler/LESICP2/output"
+    DATA_DIR = ""
     FILE_PATTERN = "iter_*.pvtu"
     BASE_GRID_RESOLUTIONX = 512
-    BASE_GRID_RESOLUTIONZ = 300
+    BASE_GRID_RESOLUTIONZ = 256
     START_STEP = 80
-    END_STEP = 140
+    END_STEP = 180
 
     # --- NEW: VERTICAL DOMAIN FILTERING ---
     # Set MAX_Z to limit analysis to a specific height (e.g., exclude upper damping layer)
@@ -623,9 +860,8 @@ if __name__ == '__main__':
     #   MAX_Z = 1000.0  # Analyze only atmospheric boundary layer (0-1000m)
     #   MAX_Z = 2000.0  # Include more of the domain
     #   MAX_Z = None    # Use entire vertical domain (default behavior)
-    MAX_Z = None  # Change this to limit vertical extent
-
-
+    MAX_Z = 1000.0  # Change this to limit vertical extent
+    
     # --- NEW: AUTOMATIC FILENAME PREFIX GENERATION ---
     # Create step range string for filenames based on START_STEP and END_STEP
     if START_STEP is not None and END_STEP is not None:
@@ -649,15 +885,21 @@ if __name__ == '__main__':
     SPECTRA_PLOT_FILE = DATA_DIR + f"/{file_prefix}turbulent_spanwise_spectra_time_averaged.png"
     SNAPSHOT_3D_NC_FILE = DATA_DIR + f"/{file_prefix}snapshot_3d.nc"
     INSTANTANEOUS_SLICE_DIR = DATA_DIR + f"/{file_prefix}instantaneous_slice/"
+    USTAR_NC_FILE = DATA_DIR + f"/{file_prefix}ustar_profile.nc"  # NEW
+    USTAR_PLOT_FILE = DATA_DIR + f"/{file_prefix}ustar_profile.png"  # NEW
     
     # --- SLICE & 3D SNAPSHOT CONFIGURATION ---
     WRITE_3D_SNAPSHOT = False
     X_SLICE_LOC = 2560.0
     Y_SLICE_LOC = 2560.0
     Z_SLICE_LOC = 100.0
-    z1 = 20.0
-    z0 = 0.1
-    kappa = 0.4
+    
+    # --- FRICTION VELOCITY PARAMETERS ---
+    # These are used to calculate u* = κ * U(z1) / ln(z1/z0)
+    z1 = 20.0      # Height at which to evaluate velocity (m)
+    z0 = 0.1       # Roughness length (m)
+    kappa = 0.4    # von Kármán constant
+    CALCULATE_USTAR = True  # Set to False to skip u* calculation
 
     # --- VARIABLE DEFINITION ---
     VELOCITY_VARS = ['u', 'v', 'w']
@@ -690,10 +932,31 @@ if __name__ == '__main__':
             end_step=END_STEP,
             profile_plot_filename=PROFILE_PLOT_FILE,
             second_moment_plot_dir=SECOND_MOMENT_PLOT_DIR,
-            max_z=MAX_Z  # NEW PARAMETER
+            max_z=MAX_Z
         )
 
-        # 2. Process and save instantaneous 2D slices for each timestep
+        # 2. Calculate friction velocity u* profile (NEW)
+        if CALCULATE_USTAR:
+            ustar_data = calculate_and_save_ustar_profile(
+                pvtu_files=processed_files,
+                z1=z1,
+                z0=z0,
+                kappa=kappa,
+                output_filename=USTAR_NC_FILE,
+                coord_precision=6
+            )
+            
+            # Plot u* profile
+            if ustar_data is not None:
+                plot_ustar_profile(
+                    ustar_data=ustar_data,
+                    output_filename=USTAR_PLOT_FILE,
+                    z1=z1,
+                    z0=z0,
+                    kappa=kappa
+                )
+
+        # 3. Process and save instantaneous 2D slices for each timestep
         if INSTANTANEOUS_SLICE_DIR:
             process_and_save_instantaneous_slices(
                 pvtu_files=processed_files,
@@ -704,25 +967,25 @@ if __name__ == '__main__':
                 x_slice_loc=X_SLICE_LOC,
                 y_slice_loc=Y_SLICE_LOC,
                 z_slice_loc=Z_SLICE_LOC,
-                max_z=MAX_Z  # NEW PARAMETER
+                max_z=MAX_Z
             )
 
-        # 3. Calculate and plot time-averaged spectra
+        # 4. Calculate and plot time-averaged spectra
         if SPECTRA_PLOT_FILE:
             calculate_and_plot_spanwise_spectra(
                 pvtu_files=processed_files,
                 variables=['u', 'v', 'w', 'θ'],
                 output_filename=SPECTRA_PLOT_FILE,
-                max_z=MAX_Z  # NEW PARAMETER
+                max_z=MAX_Z
             )
 
-        # 4. Optionally, save a full 3D snapshot
+        # 5. Optionally, save a full 3D snapshot
         if WRITE_3D_SNAPSHOT and SNAPSHOT_3D_NC_FILE:
             interpolate_and_save_3d_snapshot(
                 pvtu_files=processed_files,
                 variables=VELOCITY_VARS + SCALAR_VARS,
                 output_filename=SNAPSHOT_3D_NC_FILE,
-                max_z=MAX_Z  # NEW PARAMETER
+                max_z=MAX_Z
             )
         
         print("\n" + "="*70)

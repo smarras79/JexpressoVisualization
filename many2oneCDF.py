@@ -6,8 +6,9 @@ import os
 import numpy as np
 
 # --- Configuration (Adjust these settings) ---
-input_file_pattern = '/Users/simone/Downloads/instantaneous_slice/*.nc' 
-variable_name = 'u_slice_z100' 
+input_file_pattern = '/Users/simone/Downloads/400to659instantaneous_slice/*.nc' 
+#variable_name = 'w_slice_z100'
+variable_name = 'theta_slice_z100'
 
 output_gif_name = f'{variable_name}_timeseries.gif'
 concat_dim_name = 'time'

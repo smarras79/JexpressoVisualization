@@ -499,6 +499,9 @@ if __name__ == '__main__':
     X_SLICE_LOC = 2560.0
     Y_SLICE_LOC = 2560.0
     Z_SLICE_LOC = 100.0
+    z1          = 20.0
+    z0          = 0.1
+    kappa       = 0.4
 
     # --- VARIABLE DEFINITION ---
     VELOCITY_VARS = ['u', 'v', 'w']
