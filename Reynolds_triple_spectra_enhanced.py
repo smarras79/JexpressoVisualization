@@ -614,8 +614,8 @@ if __name__ == '__main__':
     FILE_PATTERN = "iter_*.pvtu"
     BASE_GRID_RESOLUTIONX = 512
     BASE_GRID_RESOLUTIONZ = 300
-    START_STEP = 400
-    END_STEP = 659
+    START_STEP = 80
+    END_STEP = 140
 
     # --- NEW: VERTICAL DOMAIN FILTERING ---
     # Set MAX_Z to limit analysis to a specific height (e.g., exclude upper damping layer)
@@ -624,16 +624,31 @@ if __name__ == '__main__':
     #   MAX_Z = 2000.0  # Include more of the domain
     #   MAX_Z = None    # Use entire vertical domain (default behavior)
     MAX_Z = None  # Change this to limit vertical extent
+
+
+    # --- NEW: AUTOMATIC FILENAME PREFIX GENERATION ---
+    # Create step range string for filenames based on START_STEP and END_STEP
+    if START_STEP is not None and END_STEP is not None:
+        step_range = f"{START_STEP}to{END_STEP}"
+    elif START_STEP is not None:
+        step_range = f"from{START_STEP}"
+    elif END_STEP is not None:
+        step_range = f"upto{END_STEP}"
+    else:
+        step_range = "allsteps"
     
     # If MAX_Z is set, add it to output filenames for clarity
     z_suffix = f"_maxz{int(MAX_Z)}" if MAX_Z is not None else ""
     
-    OUTPUT_NC_AVERAGED_FILE = DATA_DIR + f"/400to659{z_suffix}turbulence_statistics_averaged.nc"
-    PROFILE_PLOT_FILE = DATA_DIR + f"/400to659{z_suffix}vertical_wind_profile.png"
-    SECOND_MOMENT_PLOT_DIR = DATA_DIR + f"/400to659{z_suffix}second_moment_profiles"
-    SPECTRA_PLOT_FILE = DATA_DIR + f"/400to659{z_suffix}turbulent_spanwise_spectra_time_averaged.png"
-    SNAPSHOT_3D_NC_FILE = DATA_DIR + f"/400to659{z_suffix}snapshot_3d.nc"
-    INSTANTANEOUS_SLICE_DIR = DATA_DIR + f"/400to659{z_suffix}instantaneous_slice/"
+    # Combine step range and z-filter into filename prefix
+    file_prefix = f"{step_range}{z_suffix}"
+    
+    OUTPUT_NC_AVERAGED_FILE = DATA_DIR + f"/{file_prefix}turbulence_statistics_averaged.nc"
+    PROFILE_PLOT_FILE = DATA_DIR + f"/{file_prefix}vertical_wind_profile.png"
+    SECOND_MOMENT_PLOT_DIR = DATA_DIR + f"/{file_prefix}second_moment_profiles"
+    SPECTRA_PLOT_FILE = DATA_DIR + f"/{file_prefix}turbulent_spanwise_spectra_time_averaged.png"
+    SNAPSHOT_3D_NC_FILE = DATA_DIR + f"/{file_prefix}snapshot_3d.nc"
+    INSTANTANEOUS_SLICE_DIR = DATA_DIR + f"/{file_prefix}instantaneous_slice/"
     
     # --- SLICE & 3D SNAPSHOT CONFIGURATION ---
     WRITE_3D_SNAPSHOT = False
