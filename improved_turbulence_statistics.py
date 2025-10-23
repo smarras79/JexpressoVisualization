@@ -647,10 +647,10 @@ if __name__ == '__main__':
     # )
     
     # Option 3: Define only certain dimensions explicitly
-     grid_config = CartesianGridConfig(
-         z_min=0.0,    z_max=1500.0,  nz=72,  # Limit vertical extent
-         nx=256,       ny=128                 # Use auto bounds for x, y
-     )
+    grid_config = CartesianGridConfig(
+        z_min=0.0,    z_max=1500.0,  nz=72,  # Limit vertical extent
+        nx=256,       ny=128                 # Use auto bounds for x, y
+    )
     
     # Interpolation method: 'linear' or 'nearest'
     INTERPOLATION_METHOD = 'linear'
