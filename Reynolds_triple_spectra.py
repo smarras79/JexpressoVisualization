@@ -461,23 +461,19 @@ def calculate_and_save_averaged_stats(
 
 if __name__ == '__main__':
     # --- CONFIGURATION ---
-    #DATA_DIR = "/Users/simone/Work-local/Codes/Jexpresso/output/CompEuler/LESsmago/64x64x36_5kmX5kmX3km"
-    #DATA_DIR = "/scratch/smarras/smarras/output/64x64x48_5kmX5kmX3km_128cores/CompEuler/LESsmago/output/"
-    #DATA_DIR = "/scratch/smarras/smarras/output/32x32x24_5kmX5kmX3km/CompEuler/LESsmago32x32x24/output/"
-    #DATA_DIR = "/scratch/smarras/smarras/output/64x64x36_5kmX5kmX3km/CompEuler-CFL-at2200s/LESsmago/output/"
-    DATA_DIR = "/scratch/smarras/hw59/output/LESICP2_80x40x45_nop6_10kmX5kmX2dot8km_2/CompEuler/LESICP2/output"
+    DATA_DIR = "/scratch/smarras/smarras/output/LESICP4_scaling-8nodes-64x32x36_10kmX10kmX3km/CompEuler/LESICP4/output"
     FILE_PATTERN = "iter_*.pvtu"
     BASE_GRID_RESOLUTIONX = 512
     BASE_GRID_RESOLUTIONZ = 300
-    START_STEP = 400
-    END_STEP = 659
+    START_STEP = 1800
+    END_STEP = 2160
 
-    OUTPUT_NC_AVERAGED_FILE = DATA_DIR + "/400to659turbulence_statistics_averaged.nc" # File for all time-averaged data
-    PROFILE_PLOT_FILE = DATA_DIR + "/400to659vertical_wind_profile.png"
-    SECOND_MOMENT_PLOT_DIR = DATA_DIR + "/400to659second_moment_profiles"
-    SPECTRA_PLOT_FILE = DATA_DIR + "/400to659turbulent_spanwise_spectra_time_averaged.png"
-    SNAPSHOT_3D_NC_FILE = DATA_DIR + "/400to659snapshot_3d.nc"
-    INSTANTANEOUS_SLICE_DIR = DATA_DIR + "/400to659instantaneous_slice/" # NEW: Directory for per-timestep slice files
+    OUTPUT_NC_AVERAGED_FILE = DATA_DIR + "/1800to2160turbulence_statistics_averaged.nc" # File for all time-averaged data
+    PROFILE_PLOT_FILE = DATA_DIR + "/1800to2160vertical_wind_profile.png"
+    SECOND_MOMENT_PLOT_DIR = DATA_DIR + "/1800to2160second_moment_profiles"
+    SPECTRA_PLOT_FILE = DATA_DIR + "/1800to2160turbulent_spanwise_spectra_time_averaged.png"
+    SNAPSHOT_3D_NC_FILE = DATA_DIR + "/1800to2160snapshot_3d.nc"
+    INSTANTANEOUS_SLICE_DIR = DATA_DIR + "/1800to2160instantaneous_slice/" # NEW: Directory for per-timestep slice files
     
 
     ## --- 1. Create a single timestamped directory for all run outputs ---
@@ -499,10 +495,7 @@ if __name__ == '__main__':
     X_SLICE_LOC = 2560.0
     Y_SLICE_LOC = 2560.0
     Z_SLICE_LOC = 100.0
-    z1          = 20.0
-    z0          = 0.1
-    kappa       = 0.4
-
+    
     # --- VARIABLE DEFINITION ---
     VELOCITY_VARS = ['u', 'v', 'w']
     SCALAR_VARS = ['θ', 'p']

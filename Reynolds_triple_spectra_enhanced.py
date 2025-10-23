@@ -847,12 +847,12 @@ def plot_ustar_profile(ustar_data, output_filename, z1, z0, kappa):
 
 if __name__ == '__main__':
     # --- CONFIGURATION ---
-    DATA_DIR = ""
+    DATA_DIR = "/scratch/smarras/smarras/output/LESICP4_scaling-8nodes-64x32x36_10kmX10kmX3km/CompEuler/LESICP4/output"
     FILE_PATTERN = "iter_*.pvtu"
     BASE_GRID_RESOLUTIONX = 512
     BASE_GRID_RESOLUTIONZ = 256
-    START_STEP = 80
-    END_STEP = 180
+    START_STEP = 1800
+    END_STEP = 2160
 
     # --- NEW: VERTICAL DOMAIN FILTERING ---
     # Set MAX_Z to limit analysis to a specific height (e.g., exclude upper damping layer)
