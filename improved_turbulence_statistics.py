@@ -633,11 +633,11 @@ if __name__ == '__main__':
     
     # Option 1: Let the code automatically determine bounds from the mesh
     # and only specify resolution
-    grid_config = CartesianGridConfig(
-        nx=128,   # Number of points in x-direction
-        ny=128,   # Number of points in y-direction
-        nz=64     # Number of points in z-direction
-    )
+    #grid_config = CartesianGridConfig(
+    #    nx=256,   # Number of points in x-direction
+    #    ny=128,   # Number of points in y-direction
+    #    nz=36     # Number of points in z-direction
+    #)
     
     # Option 2: Explicitly define the domain extent and resolution
     # grid_config = CartesianGridConfig(
@@ -647,10 +647,10 @@ if __name__ == '__main__':
     # )
     
     # Option 3: Define only certain dimensions explicitly
-    # grid_config = CartesianGridConfig(
-    #     z_min=0.0,    z_max=1000.0,  nz=100,  # Limit vertical extent
-    #     nx=200,       ny=200                   # Use auto bounds for x, y
-    # )
+     grid_config = CartesianGridConfig(
+         z_min=0.0,    z_max=1500.0,  nz=72,  # Limit vertical extent
+         nx=256,       ny=128                 # Use auto bounds for x, y
+     )
     
     # Interpolation method: 'linear' or 'nearest'
     INTERPOLATION_METHOD = 'linear'
