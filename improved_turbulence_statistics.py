@@ -613,15 +613,16 @@ if __name__ == '__main__':
     # =============================================================================
     
     # Input/Output Configuration
-    DATA_DIR = "/scratch/smarras/smarras/output/LESICP4_scaling-8nodes-64x32x36_10kmX10kmX3km/CompEuler/LESICP4/output"
+    #DATA_DIR = "/scratch/smarras/smarras/output/LESICP4_scaling-8nodes-64x32x36_10kmX10kmX3km/CompEuler/LESICP4/output"
+    DATA_DIR = "./tmp/"
     FILE_PATTERN = "iter_*.pvtu"
     OUTPUT_NC_FILE = DATA_DIR + "/turbulence_statistics_cartesian.nc"
     PROFILE_PLOT_FILE = DATA_DIR + "/vertical_profiles_cartesian.png"
     SLICE_PLOT_FILE = DATA_DIR + "/horizontal_slice_cartesian.png"
     
     # Iteration range
-    START_STEP = 1800
-    END_STEP = 2160
+    START_STEP = 600 #1800
+    END_STEP = 2161
     
     # Variables to process
     VELOCITY_VARS = ['u', 'v', 'w']
@@ -700,3 +701,4 @@ if __name__ == '__main__':
         print(f"  • Statistics: {OUTPUT_NC_FILE}")
         print(f"  • Profiles:   {PROFILE_PLOT_FILE}")
         print(f"  • Slice:      {SLICE_PLOT_FILE}")
+        
