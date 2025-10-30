@@ -461,19 +461,19 @@ def calculate_and_save_averaged_stats(
 
 if __name__ == '__main__':
     # --- CONFIGURATION ---
-    DATA_DIR = "/scratch/smarras/smarras/output/LESICP4_scaling-8nodes-64x32x36_10kmX10kmX3km/CompEuler/LESICP4/output"
+    DATA_DIR = "/scratch/smarras/smarras/output/LESICP6_scaling-8nodes-64x16x36_10kmX10kmX3dot5km/CompEuler/LESICP6/output/"
     FILE_PATTERN = "iter_*.pvtu"
-    BASE_GRID_RESOLUTIONX = 512
-    BASE_GRID_RESOLUTIONZ = 300
-    START_STEP = 1800
-    END_STEP = 2160
+    BASE_GRID_RESOLUTIONX = 256
+    BASE_GRID_RESOLUTIONZ = 256
+    START_STEP = 200
+    END_STEP = 424
 
-    OUTPUT_NC_AVERAGED_FILE = DATA_DIR + "/1800to2160turbulence_statistics_averaged.nc" # File for all time-averaged data
-    PROFILE_PLOT_FILE = DATA_DIR + "/1800to2160vertical_wind_profile.png"
-    SECOND_MOMENT_PLOT_DIR = DATA_DIR + "/1800to2160second_moment_profiles"
-    SPECTRA_PLOT_FILE = DATA_DIR + "/1800to2160turbulent_spanwise_spectra_time_averaged.png"
-    SNAPSHOT_3D_NC_FILE = DATA_DIR + "/1800to2160snapshot_3d.nc"
-    INSTANTANEOUS_SLICE_DIR = DATA_DIR + "/1800to2160instantaneous_slice/" # NEW: Directory for per-timestep slice files
+    OUTPUT_NC_AVERAGED_FILE = DATA_DIR + "/9680to10800turbulence_statistics_averaged.nc" # File for all time-averaged data
+    PROFILE_PLOT_FILE = DATA_DIR + "/9680to10800vertical_wind_profile.png"
+    SECOND_MOMENT_PLOT_DIR = DATA_DIR + "/9680to10800second_moment_profiles"
+    SPECTRA_PLOT_FILE = DATA_DIR + "/9680to10800turbulent_spanwise_spectra_time_averaged.png"
+    SNAPSHOT_3D_NC_FILE = DATA_DIR + "/9680to10800snapshot_3d.nc"
+    INSTANTANEOUS_SLICE_DIR = DATA_DIR + "/9680to10800instantaneous_slice/" # NEW: Directory for per-timestep slice files
     
 
     ## --- 1. Create a single timestamped directory for all run outputs ---
