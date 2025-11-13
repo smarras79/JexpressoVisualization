@@ -21,44 +21,24 @@ Configuration:
     - end_index: Ending iteration index (optional)
 """
 
-print("DEBUG: Starting script...", flush=True)
-
 import os
 import sys
 import glob
 import re
-
-print("DEBUG: Basic imports done", flush=True)
-
 import numpy as np
-print("DEBUG: NumPy imported", flush=True)
-
 from paraview.simple import *
-print("DEBUG: paraview.simple imported", flush=True)
-
 from paraview import servermanager as sm
-print("DEBUG: servermanager imported", flush=True)
-
 from vtkmodules.numpy_interface import dataset_adapter as dsa
-print("DEBUG: dataset_adapter imported", flush=True)
-
 from vtkmodules.util import numpy_support as ns
-print("DEBUG: numpy_support imported", flush=True)
 
 # Try to import MPI for parallel processing
-print("DEBUG: Attempting to import MPI...", flush=True)
 try:
     from mpi4py import MPI
-    print("DEBUG: mpi4py imported", flush=True)
     comm = MPI.COMM_WORLD
-    print("DEBUG: MPI.COMM_WORLD obtained", flush=True)
     rank = comm.Get_rank()
-    print(f"DEBUG: MPI rank = {rank}", flush=True)
     size = comm.Get_size()
-    print(f"DEBUG: MPI size = {size}", flush=True)
     HAS_MPI = True
-except ImportError as e:
-    print(f"DEBUG: MPI import failed: {e}", flush=True)
+except ImportError:
     rank = 0
     size = 1
     HAS_MPI = False
@@ -339,7 +319,6 @@ else:
 
 
 def main():
-    print("DEBUG: main() function called", flush=True)
     print_log("=" * 80)
     print_log("PVTU Time Averaging Tool (Parallel Version)")
     print_log("=" * 80)
@@ -347,11 +326,9 @@ def main():
     print_log("")
 
     # Find input files
-    print("DEBUG: About to find PVTU files...", flush=True)
     print_log("Finding PVTU files...")
     indexed_files = find_pvtu_files(base_directory, file_pattern,
                                      start_index, end_index)
-    print(f"DEBUG: Found {len(indexed_files)} files", flush=True)
 
     n_files = len(indexed_files)
     print_log(f"Found {n_files} PVTU files to process:")
@@ -426,12 +403,8 @@ def main():
     return 0
 
 
-print("DEBUG: Reached end of script definitions", flush=True)
-
 if __name__ == "__main__":
-    print("DEBUG: __main__ block entered", flush=True)
     try:
-        print("DEBUG: About to call main()", flush=True)
         sys.exit(main())
     except Exception as e:
         print_log(f"ERROR: {e}")
