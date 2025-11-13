@@ -73,7 +73,7 @@ exclude_arrays = ['vtkGhostType', 'GlobalNodeId', 'GlobalElementId',
 # ============================================================================
 
 
-def log(msg, root_only=True):
+def print_log(msg, root_only=True):
     """Print log message (optionally only from root rank)"""
     if not root_only or rank == 0:
         print(f"[Rank {rank}] {msg}", flush=True)
@@ -117,7 +117,7 @@ def find_pvtu_files(base_dir, pattern, start_idx=None, end_idx=None):
 
 def read_pvtu_file(filepath):
     """Read a PVTU file using XMLPartitionedUnstructuredGridReader"""
-    log(f"Reading: {filepath}", root_only=False)
+    print_log(f"Reading: {filepath}", root_only=False)
 
     reader = XMLPartitionedUnstructuredGridReader(FileName=filepath)
     reader.UpdatePipeline()
@@ -179,7 +179,7 @@ def accumulate_data(source, point_accum, cell_accum):
     data_obj = sm.Fetch(source)
 
     if data_obj is None:
-        log("Warning: Fetch returned None", root_only=False)
+        print_log("Warning: Fetch returned None", root_only=False)
         return
 
     # Handle multiblock datasets (common with parallel PVTU)
@@ -319,32 +319,32 @@ else:
 
 
 def main():
-    log("=" * 80)
-    log("PVTU Time Averaging Tool (Parallel Version)")
-    log("=" * 80)
-    log(f"Running on {size} MPI rank(s)")
-    log("")
+    print_log("=" * 80)
+    print_log("PVTU Time Averaging Tool (Parallel Version)")
+    print_log("=" * 80)
+    print_log(f"Running on {size} MPI rank(s)")
+    print_log("")
 
     # Find input files
-    log("Finding PVTU files...")
+    print_log("Finding PVTU files...")
     indexed_files = find_pvtu_files(base_directory, file_pattern,
                                      start_index, end_index)
 
     n_files = len(indexed_files)
-    log(f"Found {n_files} PVTU files to process:")
+    print_log(f"Found {n_files} PVTU files to process:")
     if rank == 0:
         for idx, fpath in indexed_files[:5]:  # Show first 5
-            log(f"  [{idx}] {os.path.basename(fpath)}")
+            print_log(f"  [{idx}] {os.path.basename(fpath)}")
         if n_files > 5:
-            log(f"  ... and {n_files - 5} more files")
-    log("")
+            print_log(f"  ... and {n_files - 5} more files")
+    print_log("")
 
     if n_files == 0:
-        log("ERROR: No files found to process!")
+        print_log("ERROR: No files found to process!")
         return 1
 
     # Read first file to get array structure
-    log("Initializing from first file...")
+    print_log("Initializing from first file...")
     first_reader = read_pvtu_file(indexed_files[0][1])
 
     # Initialize accumulators
@@ -352,16 +352,16 @@ def main():
 
     n_point_arrays = len(point_accum)
     n_cell_arrays = len(cell_accum)
-    log(f"Will average {n_point_arrays} point array(s) and {n_cell_arrays} cell array(s)")
+    print_log(f"Will average {n_point_arrays} point array(s) and {n_cell_arrays} cell array(s)")
     if rank == 0:
-        log(f"Point arrays: {list(point_accum.keys())}")
-        log(f"Cell arrays: {list(cell_accum.keys())}")
-    log("")
+        print_log(f"Point arrays: {list(point_accum.keys())}")
+        print_log(f"Cell arrays: {list(cell_accum.keys())}")
+    print_log("")
 
     # Time average loop
-    log("Computing time average...")
+    print_log("Computing time average...")
     for i, (idx, filepath) in enumerate(indexed_files):
-        log(f"Processing timestep {i+1}/{n_files} (index={idx})", root_only=False)
+        print_log(f"Processing timestep {i+1}/{n_files} (index={idx})", root_only=False)
 
         if i == 0:
             # Already read first file
@@ -376,17 +376,17 @@ def main():
         if i > 0:
             Delete(reader)
 
-    log("")
-    log("Computing averages...")
+    print_log("")
+    print_log("Computing averages...")
     compute_time_average(point_accum, cell_accum, n_files)
 
     # Create output with averaged data
-    log("Creating output dataset...")
+    print_log("Creating output dataset...")
     averaged_source = create_averaged_output(first_reader, point_accum, cell_accum)
 
     # Write output
     output_path = os.path.join(base_directory, output_file)
-    log(f"Writing output to: {output_path}")
+    print_log(f"Writing output to: {output_path}")
 
     writer = XMLPUnstructuredGridWriter(
         FileName=output_path,
@@ -394,11 +394,11 @@ def main():
     )
     writer.UpdatePipeline()
 
-    log("")
-    log("=" * 80)
-    log("Time averaging complete!")
-    log(f"Output written to: {output_path}")
-    log("=" * 80)
+    print_log("")
+    print_log("=" * 80)
+    print_log("Time averaging complete!")
+    print_log(f"Output written to: {output_path}")
+    print_log("=" * 80)
 
     return 0
 
@@ -407,7 +407,7 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as e:
-        log(f"ERROR: {e}")
+        print_log(f"ERROR: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
