@@ -388,16 +388,22 @@ def main():
     output_path = os.path.join(base_directory, output_file)
     print_log(f"Writing output to: {output_path}")
 
-    writer = XMLPUnstructuredGridWriter(
-        FileName=output_path,
-        Input=averaged_source
-    )
-    writer.UpdatePipeline()
+    # Use SaveData which handles parallel writing automatically
+    SaveData(output_path, proxy=averaged_source)
 
     print_log("")
     print_log("=" * 80)
     print_log("Time averaging complete!")
     print_log(f"Output written to: {output_path}")
+
+    # List the created files
+    if rank == 0:
+        base_name = os.path.splitext(output_file)[0]
+        vtu_pattern = os.path.join(base_directory, f"{base_name}*.vtu")
+        vtu_files = glob.glob(vtu_pattern)
+        if vtu_files:
+            print_log(f"Created {len(vtu_files)} VTU piece file(s)")
+
     print_log("=" * 80)
 
     return 0
