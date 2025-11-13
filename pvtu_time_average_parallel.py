@@ -241,81 +241,65 @@ def compute_time_average(point_accum, cell_accum, n_timesteps):
 
 def create_averaged_output(template_source, point_accum, cell_accum):
     """
-    Create a ProgrammableFilter that outputs the time-averaged data
-    using the geometry from the template source
+    Create output with time-averaged data by directly modifying the VTK data object
     """
-    pf = ProgrammableFilter(Input=template_source)
+    # Fetch the actual data from the template source
+    # This gets the data local to this MPI rank
+    data_obj = sm.Fetch(template_source)
 
-    # Store the averaged arrays in a way the script can access them
-    # We'll use a global variable for simplicity
-    global GLOBAL_POINT_ACCUM, GLOBAL_CELL_ACCUM
-    GLOBAL_POINT_ACCUM = point_accum
-    GLOBAL_CELL_ACCUM = cell_accum
+    if data_obj is None:
+        print_log("Warning: Could not fetch data for output creation", root_only=False)
+        return template_source
 
-    script = """
-import numpy as np
-from vtkmodules.numpy_interface import dataset_adapter as dsa
-from vtkmodules.util import numpy_support as ns
+    # Handle multiblock datasets
+    from vtkmodules.vtkCommonDataModel import vtkMultiBlockDataSet, vtkCompositeDataSet
 
-# Get input (template geometry)
-inp = self.GetInput()
-out = self.GetOutput()
-out.ShallowCopy(inp)
+    if isinstance(data_obj, vtkCompositeDataSet):
+        # For composite datasets, add averaged arrays to each block
+        iterator = data_obj.NewIterator()
+        iterator.UnRegister(None)
+        iterator.InitTraversal()
 
-# Access global accumulators (set by parent script)
-import __main__
-point_accum = getattr(__main__, 'GLOBAL_POINT_ACCUM', {})
-cell_accum = getattr(__main__, 'GLOBAL_CELL_ACCUM', {})
+        while not iterator.IsDoneWithTraversal():
+            block = data_obj.GetDataSet(iterator)
+            if block:
+                # Add point arrays
+                for name, data in point_accum.items():
+                    if data is not None:
+                        vtk_arr = ns.numpy_to_vtk(data, deep=1)
+                        vtk_arr.SetName(name + "_avg")
+                        block.GetPointData().AddArray(vtk_arr)
 
-# Handle multiblock datasets
-from vtkmodules.vtkCommonDataModel import vtkCompositeDataSet
+                # Add cell arrays
+                for name, data in cell_accum.items():
+                    if data is not None:
+                        vtk_arr = ns.numpy_to_vtk(data, deep=1)
+                        vtk_arr.SetName(name + "_avg")
+                        block.GetCellData().AddArray(vtk_arr)
 
-if isinstance(out, vtkCompositeDataSet):
-    # For composite datasets, we need to add arrays to each block
-    iterator = out.NewIterator()
-    iterator.UnRegister(None)
-    iterator.InitTraversal()
+            iterator.GoToNextItem()
+    else:
+        # Single block dataset
+        for name, data in point_accum.items():
+            if data is not None:
+                vtk_arr = ns.numpy_to_vtk(data, deep=1)
+                vtk_arr.SetName(name + "_avg")
+                data_obj.GetPointData().AddArray(vtk_arr)
 
-    block_idx = 0
-    while not iterator.IsDoneWithTraversal():
-        block = out.GetDataSet(iterator)
-        if block:
-            # Add point arrays
-            for name, data in point_accum.items():
-                if data is not None:
-                    vtk_arr = ns.numpy_to_vtk(data, deep=1)
-                    vtk_arr.SetName(name + "_avg")
-                    block.GetPointData().AddArray(vtk_arr)
+        for name, data in cell_accum.items():
+            if data is not None:
+                vtk_arr = ns.numpy_to_vtk(data, deep=1)
+                vtk_arr.SetName(name + "_avg")
+                data_obj.GetCellData().AddArray(vtk_arr)
 
-            # Add cell arrays
-            for name, data in cell_accum.items():
-                if data is not None:
-                    vtk_arr = ns.numpy_to_vtk(data, deep=1)
-                    vtk_arr.SetName(name + "_avg")
-                    block.GetCellData().AddArray(vtk_arr)
+    # Now we need to create a TrivialProducer to wrap this modified data
+    # so we can use it with SaveData
+    from paraview.simple import TrivialProducer
+    producer = TrivialProducer()
+    producer.GetClientSideObject().SetOutput(data_obj)
+    producer.UpdatePipeline()
 
-            block_idx += 1
-
-        iterator.GoToNextItem()
-else:
-    # Single block dataset
-    for name, data in point_accum.items():
-        if data is not None:
-            vtk_arr = ns.numpy_to_vtk(data, deep=1)
-            vtk_arr.SetName(name + "_avg")
-            out.GetPointData().AddArray(vtk_arr)
-
-    for name, data in cell_accum.items():
-        if data is not None:
-            vtk_arr = ns.numpy_to_vtk(data, deep=1)
-            vtk_arr.SetName(name + "_avg")
-            out.GetCellData().AddArray(vtk_arr)
-"""
-
-    pf.Script = script
-    pf.UpdatePipeline()
-
-    return pf
+    return producer
 
 
 def main():
