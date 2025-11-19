@@ -21,9 +21,9 @@ from pathlib import Path
 # -------------------------------
 INPUT_PARAMETERS = {
     'pattern_type': 'glob',
-    'base_directory': './',
-    'file_template': '*.foam',
-    'output_directory': './out',
+    'base_directory': '/scratch/smarras/smarras/output/LESICP2_64x64x36_10kmX10kmX3dot5km-filtered-smag1-warmstart/CompEuler/LESICP2/',
+    'file_template': '*.pvtu',
+    'output_directory': '/scratch/smarras/smarras/output/LESICP2_64x64x36_10kmX10kmX3dot5km-filtered-smag1-warmstart/CompEuler/LESICP2/AVE/',
     'number_range': None,
     'start_time': 6,        # None --> to start from 0
     'end_time': 20,
@@ -40,13 +40,6 @@ INPUT_PARAMETERS = {
     },
     'slice': {
         'enabled': True,      # set False to disable
-    },
-    # ---- OpenFOAM-specific options ----
-    'openfoam': {
-        'mode': 'decomposed',                                        # 'reconstructed' | 'decomposed' | 'auto'
-        'mesh_regions': ['internalMesh'],                            # or [] / None
-        'cell_arrays':  ['U', 'alpha.water', 'nut', 'UAvg'],         # or [] / None , 'UAvg', 'nut
-        'point_arrays': ['U', 'alpha.water', 'nut', 'UAvg'],         # e.g., ['T']
     },
 
     # ---- Visualization options ----

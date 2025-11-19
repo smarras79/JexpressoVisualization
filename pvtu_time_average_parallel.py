@@ -49,19 +49,20 @@ except ImportError:
 # ============================================================================
 
 # Base directory containing PVTU files
-base_directory = "/scratch/smarras/smarras/output/LESICP6_64x64x36_10kmX10kmX3dot5km-filtered-smag1-warmstart/CompEuler/LESICP6/output/"
+#base_directory = "/scratch/smarras/smarras/output/LESICP6_64x64x36_10kmX10kmX3dot5km-filtered-smag1-warmstart/CompEuler/LESICP6/output/"
+base_directory = "/scratch/smarras/smarras/output/LESICP2_64x64x36_10kmX10kmX3dot5km-filtered-smag1-warmstart/CompEuler/LESICP2/output/"
 
 # File pattern for PVTU files (use wildcards)
 # Examples: "iter_*.pvtu", "output_*.pvtu", "timestep_*.pvtu"
 file_pattern = "iter_*.pvtu"
 
 # Output file name (will be saved in base_directory)
-output_file = "test_time_averaged.pvtu"
+output_file = "LES2_test_time_averaged.pvtu"
 
 # Optional: Specify iteration range to process
 # Set to None to process all files matching the pattern
-start_index = 271  # e.g., 1 or None
-end_index = 273    # e.g., 100 or None
+start_index = 1 #310  # e.g., 1 or None
+end_index = 351 #451    # e.g., 100 or None
 
 # Arrays to exclude from averaging (typically index/id fields)
 # Add any array names you don't want to average
